@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Agape Kiddie City Academy</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <h1>Agape Kiddie City Academy</h1>
+    <nav>
+      <a href="#dashboard" class="nav-link active" data-section="dashboard">Dashboard</a>
+      <a href="#pupils" class="nav-link" data-section="pupils">Pupils</a>
+      <a href="#fees" class="nav-link" data-section="fees">Fees &amp; Billing</a>
+      <a href="#attendance" class="nav-link" data-section="attendance">Attendance</a>
+    </nav>
+  </header>
+
+  <main class="container">
+    <!-- Dashboard -->
+    <section id="dashboard" class="page active">
+      <div class="page-header">
+        <h2>Dashboard Summary</h2>
+        <button class="eye-btn" id="dashboard-eye" type="button" onclick="toggleAmounts('dashboard')" title="Show amounts" aria-label="Show amounts"></button>
+      </div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <h3>Total Pupils</h3>
+          <p id="stat-total-pupils">-</p>
+        </div>
+        <div class="stat-card">
+          <h3>Fees Billed</h3>
+          <p id="stat-total-billed" class="money" data-money-scope="dashboard" data-value="0">GHS ••••</p>
+        </div>
+        <div class="stat-card">
+          <h3>Fees Collected</h3>
+          <p id="stat-total-collected" class="money" data-money-scope="dashboard" data-value="0">GHS ••••</p>
+        </div>
+        <div class="stat-card">
+          <h3>Outstanding Balance</h3>
+          <p id="stat-outstanding" class="money" data-money-scope="dashboard" data-value="0">GHS ••••</p>
+        </div>
+      </div>
+      <table>
+        <thead>
+          <tr><th>Section</th><th>Pupils</th></tr>
+        </thead>
+        <tbody id="section-table-body"></tbody>
+      </table>
+    </section>
+
+    <!-- Pupils -->
+    <section id="pupils" class="page">
+      <div class="page-header">
+        <h2>Pupils Directory</h2>
+        <button class="btn btn-primary" onclick="openPupilModal()">Add Pupil</button>
+      </div>
+      <div class="filters">
+        <select id="filter-section" onchange="onPupilSectionFilterChange()">
+          <option value="">All Sections</option>
+          <option value="Crèche">Crèche</option>
+          <option value="Kindergarten">Kindergarten</option>
+          <option value="Primary">Primary</option>
+        </select>
+        <select id="filter-class" onchange="loadPupils()">
+          <option value="">All Classes</option>
+        </select>
+        <input type="text" id="filter-search" placeholder="Search by name or guardian" oninput="loadPupils()" />
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Full Name</th>
+            <th>Class</th>
+            <th>Guardian Name</th>
+            <th>Guardian Phone</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="pupils-table-body"></tbody>
+      </table>
+    </section>
+
+    <!-- Fees -->
+    <section id="fees" class="page">
+      <div class="page-header">
+        <h2>Fees &amp; Billing</h2>
+        <div class="header-actions">
+          <button class="eye-btn" id="fees-eye" type="button" onclick="toggleAmounts('fees')" title="Show amounts" aria-label="Show amounts"></button>
+          <button class="btn btn-secondary" onclick="openBatchInvoiceModal()">General Invoice</button>
+          <button class="btn btn-primary" onclick="openInvoiceModal()">Individual Invoice</button>
+        </div>
+      </div>
+
+      <div class="summary-cards">
+        <div class="stat-card">
+          <h3>Total Billed</h3>
+          <p id="fees-total-billed" class="money" data-money-scope="fees" data-value="0">GHS ••••</p>
+        </div>
+        <div class="stat-card">
+          <h3>Total Collected</h3>
+          <p id="fees-total-collected" class="money" data-money-scope="fees" data-value="0">GHS ••••</p>
+        </div>
+        <div class="stat-card">
+          <h3>Outstanding</h3>
+          <p id="fees-outstanding" class="money" data-money-scope="fees" data-value="0">GHS ••••</p>
+        </div>
+      </div>
+
+      <div id="fees-groups"></div>
+    </section>
+
+    <!-- Attendance -->
+    <section id="attendance" class="page">
+      <div class="page-header">
+        <h2>Daily Attendance</h2>
+        <div class="attendance-controls">
+          <input type="date" id="attendance-date" onchange="loadAttendance()" />
+          <select id="attendance-section" onchange="onAttendanceSectionChange()">
+            <option value="">All Sections</option>
+            <option value="Crèche">Crèche</option>
+            <option value="Kindergarten">Kindergarten</option>
+            <option value="Primary">Primary</option>
+          </select>
+          <select id="attendance-class" onchange="loadAttendance()">
+            <option value="">All Classes</option>
+          </select>
+          <button class="btn btn-success" onclick="markAllPresent()">Mark All Present</button>
+        </div>
+      </div>
+      <p class="hint">Every pupil is listed for the selected date. Choose a status and it saves automatically.</p>
+      <div id="attendance-summary" class="summary-cards"></div>
+      <table>
+        <thead>
+          <tr>
+            <th>Pupil</th>
+            <th>Class</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="attendance-table-body"></tbody>
+      </table>
+    </section>
+  </main>
+
+  <!-- Pupil Modal -->
+  <div id="pupil-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closePupilModal()">&times;</span>
+      <h2 id="pupil-modal-title">Add Pupil</h2>
+      <form id="pupil-form">
+        <input type="hidden" id="pupil-id" />
+        <div class="form-group">
+          <label>Full Name</label>
+          <input type="text" id="pupil-full-name" required />
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Section</label>
+            <select id="pupil-section" onchange="onPupilFormSectionChange()" required>
+              <option value="Crèche">Crèche</option>
+              <option value="Kindergarten">Kindergarten</option>
+              <option value="Primary">Primary</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Class</label>
+            <select id="pupil-class" required></select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Guardian Name</label>
+          <input type="text" id="pupil-guardian-name" required />
+        </div>
+        <div class="form-group">
+          <label>Guardian Phone</label>
+          <input type="text" id="pupil-guardian-phone" required />
+        </div>
+        <div class="form-group">
+          <label>Enrollment Status</label>
+          <select id="pupil-enrollment-status">
+            <option value="Active">Active</option>
+            <option value="Inactive">Inactive</option>
+          </select>
+        </div>
+        <button type="submit" class="btn btn-primary">Save</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Individual Invoice Modal -->
+  <div id="invoice-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeInvoiceModal()">&times;</span>
+      <h2>Create Individual Invoice</h2>
+      <form id="invoice-form">
+        <div class="form-group">
+          <label>Pupil</label>
+          <select id="invoice-pupil" required></select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Term</label>
+            <input type="text" id="invoice-term" placeholder="e.g. Term 1" required />
+          </div>
+          <div class="form-group">
+            <label>Academic Year</label>
+            <input type="text" id="invoice-academic-year" placeholder="e.g. 2025-2026" required />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="invoice-description" placeholder="Optional, e.g. School fees" />
+        </div>
+        <div class="form-group">
+          <label>Amount Billed (GHS)</label>
+          <input type="number" id="invoice-amount-billed" min="0" step="0.01" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Create Invoice</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- General (Batch) Invoice Modal -->
+  <div id="batch-invoice-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeBatchInvoiceModal()">&times;</span>
+      <h2>Create General Invoice</h2>
+      <p class="modal-note">Creates one invoice for every active pupil in the selected group. Pupils who already have an invoice for the same term are skipped.</p>
+      <form id="batch-invoice-form">
+        <div class="form-group">
+          <label>Invoice For</label>
+          <select id="batch-target" required>
+            <option value="all">All Pupils</option>
+            <option value="Crèche">Crèche (whole section)</option>
+            <option value="Kindergarten">Kindergarten (whole section)</option>
+            <option value="Kindergarten 1">Kindergarten 1</option>
+            <option value="Kindergarten 2">Kindergarten 2</option>
+            <option value="Primary">Primary (whole section)</option>
+            <option value="Primary 1">Primary 1</option>
+            <option value="Primary 2">Primary 2</option>
+            <option value="Primary 3">Primary 3</option>
+            <option value="Primary 4">Primary 4</option>
+            <option value="Primary 5">Primary 5</option>
+            <option value="Primary 6">Primary 6</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Term</label>
+            <input type="text" id="batch-term" placeholder="e.g. Term 1" required />
+          </div>
+          <div class="form-group">
+            <label>Academic Year</label>
+            <input type="text" id="batch-academic-year" placeholder="e.g. 2025-2026" required />
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Description</label>
+          <input type="text" id="batch-description" placeholder="e.g. General school fees" />
+        </div>
+        <div class="form-group">
+          <label>Amount per Pupil (GHS)</label>
+          <input type="number" id="batch-amount-billed" min="0" step="0.01" required />
+        </div>
+        <button type="submit" class="btn btn-primary">Create General Invoice</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- Payment Modal -->
+  <div id="payment-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closePaymentModal()">&times;</span>
+      <h2>Record Payment</h2>
+      <p class="modal-note" id="payment-invoice-label"></p>
+      <form id="payment-form">
+        <input type="hidden" id="payment-invoice-id" />
+        <div class="form-group">
+          <label>Amount Paid (GHS)</label>
+          <input type="number" id="payment-amount" min="0" step="0.01" required />
+        </div>
+        <div class="form-group">
+          <label>Note</label>
+          <input type="text" id="payment-note" placeholder="Optional note" />
+        </div>
+        <button type="submit" class="btn btn-primary">Record Payment</button>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
