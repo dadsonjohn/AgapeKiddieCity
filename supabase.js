@@ -1,17 +1,27 @@
 require('dotenv').config({ quiet: true });
 
-// @supabase/server uses SUPABASE_SECRET_KEY (or SUPABASE_SECRET_KEYS).
-// Accept the older service-role variable names as a convenience.
-if (!process.env.SUPABASE_SECRET_KEY && !process.env.SUPABASE_SECRET_KEYS) {
-  const legacyKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY;
-  if (legacyKey) process.env.SUPABASE_SECRET_KEY = legacyKey;
-}
+const { createClient } = require('@supabase/supabase-js');
 
-const { createAdminClient } = require('@supabase/server/core');
+// Accept the older service-role variable names as a convenience.
+const secretKey = process.env.SUPABASE_SECRET_KEY
+  || process.env.SUPABASE_SERVICE_ROLE_KEY
+  || process.env.SUPABASE_KEY;
 
 let supabase;
 try {
-  supabase = createAdminClient();
+  if (!process.env.SUPABASE_URL || !secretKey) {
+    throw new Error('SUPABASE_URL and SUPABASE_SECRET_KEY must be set in the environment.');
+  }
+
+  // The secret key gives the server full access and bypasses RLS. It is never
+  // exposed to the browser; all database calls go through the Express server.
+  supabase = createClient(process.env.SUPABASE_URL, secretKey, {
+    auth: {
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false
+    }
+  });
 } catch (err) {
   console.error('\n[Supabase] Could not create the database client.');
   console.error('[Supabase] ' + err.message);
