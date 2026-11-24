@@ -328,6 +328,8 @@ curl https://agapekiddiecity.vercel.app/api/dashboard/summary
 ## 10. Git history
 
 ```
+2644be6  Add admin/teacher authentication and pupil validation
+37d81f5  Add full project handoff documentation
 f36c24a  Document live deployment and agapekiddiecity.vercel.app domain
 073b1aa  Use @supabase/supabase-js for Vercel compatibility
 174de9b  Add Vercel serverless deployment support
@@ -335,7 +337,7 @@ f36c24a  Document live deployment and agapekiddiecity.vercel.app domain
 92c960e  Initial commit for School ERP
 ```
 
-Working tree was clean and `main` matched `origin/main` after the last push.
+Working tree was clean and `main` matched `origin/main` after the auth/validation push.
 
 ---
 
