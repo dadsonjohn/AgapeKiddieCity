@@ -2,6 +2,8 @@
 
 A lightweight school ERP web application for Agape Kiddie City Academy, built with Node.js, Express, and **Supabase** (Postgres). All records are stored in your Supabase project.
 
+**Live app:** https://agapekiddiecity.vercel.app
+
 ## Features
 
 - **Dashboard Summary**: Total pupils by section (Crèche, Kindergarten, Primary), fees billed, fees collected, and outstanding balances.
@@ -13,7 +15,10 @@ A lightweight school ERP web application for Agape Kiddie City Academy, built wi
 
 ```
 Simple ERP/
-├── server.js               # Express server entry point
+├── app.js                  # Express app (routes, static files, API)
+├── server.js               # Local server entry point (app.listen)
+├── api/index.js            # Vercel serverless entry point
+├── vercel.json             # Vercel routing config
 ├── supabase.js             # Supabase client (secret key, server-side only)
 ├── constants.js            # Sections and class levels
 ├── package.json            # Node.js dependencies & scripts
@@ -125,6 +130,26 @@ If the server reports that tables are missing, repeat step 2.
 | `npm run setup` | Apply `supabase/schema.sql` using `SUPABASE_DB_URL` |
 | `npm run migrate` | Copy `erp.db` into Supabase |
 | `npm run migrate -- --force` | Wipe Supabase data, then copy `erp.db` |
+
+## 5. Deploy to Vercel
+
+The repository is connected to Vercel, so every push to `main` deploys automatically.
+
+- **Production URL:** https://agapekiddiecity.vercel.app
+- **Vercel project:** https://vercel.com/dadsonjohn/agape-kiddie-city
+- **Entry point:** `api/index.js` (exports the Express app from `app.js`)
+- **Routing:** `vercel.json` sends every request to the Express function
+
+Add these environment variables in **Vercel → Project → Settings → Environment Variables** (Production and Preview):
+
+```
+SUPABASE_URL
+SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+SUPABASE_JWKS_URL
+```
+
+The secret key is server-side only. Do not expose it to the browser or commit it to Git.
 
 ## Health check
 
