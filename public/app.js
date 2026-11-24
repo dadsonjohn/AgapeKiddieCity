@@ -1,5 +1,244 @@
 const API = '/api';
 
+let currentUser = null;
+
+// Wraps fetch so an expired session sends the user back to the login screen.
+async function apiFetch(url, options) {
+  const res = await fetch(url, options);
+  if (res.status === 401) {
+    showAuthScreen();
+    throw new Error('Your session has expired. Please log in again.');
+  }
+  return res;
+}
+
+// --- Auth screen ---
+function showAuthError(message) {
+  const box = document.getElementById('auth-error');
+  box.textContent = message || '';
+  box.hidden = !message;
+}
+
+function switchAuthTab(tab) {
+  showAuthError('');
+  document.querySelectorAll('.auth-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.authTab === tab);
+  });
+  document.getElementById('login-form').hidden = tab !== 'login';
+  document.getElementById('signup-form').hidden = tab !== 'signup';
+}
+
+function showAuthScreen() {
+  currentUser = null;
+  document.getElementById('app-header').hidden = true;
+  document.getElementById('app-main').hidden = true;
+  document.getElementById('auth-screen').hidden = false;
+  document.body.classList.remove('role-admin', 'role-teacher');
+  showAuthError('');
+  switchAuthTab('login');
+}
+
+function enterApp(user) {
+  currentUser = user;
+  document.getElementById('auth-screen').hidden = true;
+  document.getElementById('app-header').hidden = false;
+  document.getElementById('app-main').hidden = false;
+
+  document.getElementById('user-name').textContent = user.full_name || user.email;
+  const roleBadge = document.getElementById('user-role');
+  roleBadge.textContent = user.role === 'admin' ? 'Admin' : 'Teacher';
+  roleBadge.className = `user-role-badge role-${user.role}`;
+
+  applyRoleUI(user);
+  loadDashboard();
+}
+
+function applyRoleUI(user) {
+  const isAdmin = user.role === 'admin';
+  document.body.classList.toggle('role-admin', isAdmin);
+  document.body.classList.toggle('role-teacher', !isAdmin);
+
+  if (!isAdmin) {
+    const activePage = document.querySelector('.page.active');
+    if (activePage && (activePage.id === 'fees' || activePage.id === 'team')) {
+      activatePage('dashboard');
+    }
+  }
+}
+
+function activatePage(section) {
+  document.querySelectorAll('.nav-link').forEach(link => {
+    link.classList.toggle('active', link.dataset.section === section);
+  });
+  document.querySelectorAll('.page').forEach(page => {
+    page.classList.toggle('active', page.id === section);
+  });
+  loadPageData(section);
+}
+
+async function checkAuth() {
+  try {
+    const res = await fetch(`${API}/auth/me`);
+    if (!res.ok) {
+      showAuthScreen();
+      return;
+    }
+    const data = await res.json();
+    enterApp(data.user);
+  } catch (err) {
+    showAuthScreen();
+  }
+}
+
+async function logout() {
+  try {
+    await fetch(`${API}/auth/logout`, { method: 'POST' });
+  } catch (err) {
+    // Ignore network errors; the local session is cleared regardless.
+  }
+  showAuthScreen();
+}
+
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showAuthError('');
+
+  const button = e.target.querySelector('button[type="submit"]');
+  button.disabled = true;
+
+  try {
+    const res = await fetch(`${API}/auth/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: document.getElementById('login-email').value,
+        password: document.getElementById('login-password').value
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to log in.');
+    e.target.reset();
+    enterApp(data.user);
+  } catch (err) {
+    showAuthError(err.message || 'Unable to log in.');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+document.getElementById('signup-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  showAuthError('');
+
+  const password = document.getElementById('signup-password').value;
+  const confirm = document.getElementById('signup-confirm').value;
+  if (password !== confirm) {
+    showAuthError('The two passwords do not match.');
+    return;
+  }
+
+  const button = e.target.querySelector('button[type="submit"]');
+  button.disabled = true;
+
+  try {
+    const res = await fetch(`${API}/auth/signup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        full_name: document.getElementById('signup-name').value,
+        email: document.getElementById('signup-email').value,
+        password
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Unable to create the account.');
+    e.target.reset();
+    enterApp(data.user);
+  } catch (err) {
+    showAuthError(err.message || 'Unable to create the account.');
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// --- Team accounts (admin only) ---
+async function loadTeam() {
+  try {
+    const res = await apiFetch(`${API}/auth/users`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load accounts');
+
+    const tbody = document.getElementById('team-table-body');
+    tbody.innerHTML = '';
+
+    data.users.forEach(user => {
+      const isSelf = currentUser && user.id === currentUser.id;
+      const joined = user.created_at ? new Date(user.created_at).toLocaleDateString() : '—';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(user.full_name)}${isSelf ? ' <span class="badge badge-light">You</span>' : ''}</td>
+        <td>${escapeHtml(user.email)}</td>
+        <td>
+          <select class="role-select" ${isSelf ? 'disabled title="You cannot change your own role"' : ''} onchange="changeUserRole('${user.id}', this.value, this)">
+            <option value="admin" ${user.role === 'admin' ? 'selected' : ''}>Admin</option>
+            <option value="teacher" ${user.role === 'teacher' ? 'selected' : ''}>Teacher</option>
+          </select>
+        </td>
+        <td>${escapeHtml(joined)}</td>
+        <td class="row-actions">
+          <button class="btn btn-sm btn-danger" ${isSelf ? 'disabled title="You cannot delete your own account"' : ''} onclick="removeUser('${user.id}', this)">Remove</button>
+        </td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    if (!data.users.length) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No accounts found.</td></tr>';
+    }
+  } catch (err) {
+    alert(err.message || 'Failed to load accounts');
+  }
+}
+
+async function changeUserRole(userId, role, selectEl) {
+  try {
+    const res = await apiFetch(`${API}/auth/users/${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ role })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to update account');
+    loadTeam();
+  } catch (err) {
+    alert(err.message || 'Failed to update account');
+    if (selectEl) selectEl.value = selectEl.dataset.previous || selectEl.value;
+    loadTeam();
+  }
+}
+
+async function removeUser(userId, buttonEl) {
+  if (!confirm('Remove this account? They will no longer be able to log in.')) return;
+  if (buttonEl) buttonEl.disabled = true;
+
+  try {
+    const res = await apiFetch(`${API}/auth/users/${userId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to remove account');
+    loadTeam();
+  } catch (err) {
+    alert(err.message || 'Failed to remove account');
+    if (buttonEl) buttonEl.disabled = false;
+  }
+}
+
+// --- Input helpers ---
+function digitsOnly(input) {
+  const cleaned = input.value.replace(/\D/g, '').slice(0, 10);
+  if (input.value !== cleaned) input.value = cleaned;
+}
+
+
 // --- Class definitions ---
 const CLASS_LEVELS = {
   'Crèche': ['Crèche'],
@@ -109,12 +348,13 @@ function loadPageData(section) {
     ensureAttendanceDate();
     loadAttendance();
   }
+  if (section === 'team') loadTeam();
 }
 
 // --- Dashboard ---
 async function loadDashboard() {
   try {
-    const res = await fetch(`${API}/dashboard/summary`);
+    const res = await apiFetch(`${API}/dashboard/summary`);
     const data = await res.json();
 
     document.getElementById('stat-total-pupils').textContent = data.totalPupils;
@@ -152,7 +392,7 @@ async function loadPupils() {
     if (classLevel) url += `class_level=${encodeURIComponent(classLevel)}&`;
     if (search) url += `search=${encodeURIComponent(search)}&`;
 
-    const res = await fetch(url);
+    const res = await apiFetch(url);
     const pupils = await res.json();
 
     const tbody = document.getElementById('pupils-table-body');
@@ -165,7 +405,7 @@ async function loadPupils() {
         <td>${escapeHtml(p.guardian_name)}</td>
         <td>${escapeHtml(p.guardian_phone)}</td>
         <td><span class="status-badge status-${p.enrollment_status}">${p.enrollment_status}</span></td>
-        <td class="row-actions">
+        <td class="row-actions admin-only">
           <button class="btn btn-sm btn-primary" onclick="editPupil(${p.id})">Edit</button>
           <button class="btn btn-sm btn-danger" onclick="deletePupil(${p.id})">Delete</button>
         </td>
@@ -219,7 +459,7 @@ function closePupilModal() {
 
 async function editPupil(id) {
   try {
-    const res = await fetch(`${API}/pupils/${id}`);
+    const res = await apiFetch(`${API}/pupils/${id}`);
     const pupil = await res.json();
     openPupilModal(pupil);
   } catch (err) {
@@ -230,7 +470,7 @@ async function editPupil(id) {
 async function deletePupil(id) {
   if (!confirm('Are you sure you want to delete this pupil?')) return;
   try {
-    await fetch(`${API}/pupils/${id}`, { method: 'DELETE' });
+    await apiFetch(`${API}/pupils/${id}`, { method: 'DELETE' });
     loadPupils();
     loadDashboard();
   } catch (err) {
@@ -241,17 +481,22 @@ async function deletePupil(id) {
 document.getElementById('pupil-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const id = document.getElementById('pupil-id').value;
+  const phone = document.getElementById('pupil-guardian-phone').value.trim();
+  if (!/^\d{10}$/.test(phone)) {
+    alert('Guardian phone must be exactly 10 digits (numbers only).');
+    return;
+  }
   const pupilData = {
     full_name: document.getElementById('pupil-full-name').value,
     section: document.getElementById('pupil-section').value,
     class_level: document.getElementById('pupil-class').value,
     guardian_name: document.getElementById('pupil-guardian-name').value,
-    guardian_phone: document.getElementById('pupil-guardian-phone').value,
+    guardian_phone: phone,
     enrollment_status: document.getElementById('pupil-enrollment-status').value
   };
 
   try {
-    const res = await fetch(id ? `${API}/pupils/${id}` : `${API}/pupils`, {
+    const res = await apiFetch(id ? `${API}/pupils/${id}` : `${API}/pupils`, {
       method: id ? 'PUT' : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pupilData)
@@ -273,12 +518,12 @@ let feeInvoicesCache = [];
 
 async function loadFees() {
   try {
-    const res = await fetch(`${API}/fees`);
+    const res = await apiFetch(`${API}/fees`);
     const invoices = await res.json();
     feeInvoicesCache = invoices;
 
     // Populate pupil dropdown in the individual invoice modal
-    const pupilRes = await fetch(`${API}/pupils`);
+    const pupilRes = await apiFetch(`${API}/pupils`);
     const pupils = await pupilRes.json();
     const pupilSelect = document.getElementById('invoice-pupil');
     pupilSelect.innerHTML = '';
@@ -434,7 +679,7 @@ document.getElementById('invoice-form').addEventListener('submit', async (e) => 
   };
 
   try {
-    const res = await fetch(`${API}/fees`, {
+    const res = await apiFetch(`${API}/fees`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -471,7 +716,7 @@ document.getElementById('batch-invoice-form').addEventListener('submit', async (
   };
 
   try {
-    const res = await fetch(`${API}/fees/bulk`, {
+    const res = await apiFetch(`${API}/fees/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -503,7 +748,7 @@ document.getElementById('batch-invoice-form').addEventListener('submit', async (
 async function deleteInvoice(id) {
   if (!confirm('Delete this invoice?')) return;
   try {
-    await fetch(`${API}/fees/${id}`, { method: 'DELETE' });
+    await apiFetch(`${API}/fees/${id}`, { method: 'DELETE' });
     loadFees();
     loadDashboard();
   } catch (err) {
@@ -537,7 +782,7 @@ document.getElementById('payment-form').addEventListener('submit', async (e) => 
   };
 
   try {
-    const res = await fetch(`${API}/fees/${invoiceId}/payments`, {
+    const res = await apiFetch(`${API}/fees/${invoiceId}/payments`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
@@ -578,8 +823,8 @@ async function loadAttendance() {
     if (classLevel) pupilUrl += `class_level=${encodeURIComponent(classLevel)}&`;
 
     const [pupilRes, attendanceRes] = await Promise.all([
-      fetch(pupilUrl),
-      fetch(`${API}/attendance?date=${encodeURIComponent(date)}`)
+      apiFetch(pupilUrl),
+      apiFetch(`${API}/attendance?date=${encodeURIComponent(date)}`)
     ]);
     const pupils = await pupilRes.json();
     const records = await attendanceRes.json();
@@ -643,7 +888,7 @@ async function loadAttendance() {
 
 async function loadAttendanceSummary(date) {
   try {
-    const res = await fetch(`${API}/attendance/summary/${date}`);
+    const res = await apiFetch(`${API}/attendance/summary/${date}`);
     const data = await res.json();
 
     const container = document.getElementById('attendance-summary');
@@ -670,7 +915,7 @@ async function saveAttendance(pupilId, status, selectEl) {
   if (!status) return;
   const date = document.getElementById('attendance-date').value;
   try {
-    const res = await fetch(`${API}/attendance`, {
+    const res = await apiFetch(`${API}/attendance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pupil_id: pupilId, attendance_date: date, status })
@@ -700,7 +945,7 @@ async function markAllPresent() {
   if (!confirm(`Mark all ${pupilIds.length} pupil(s) present for ${date}?`)) return;
 
   try {
-    const res = await fetch(`${API}/attendance/bulk`, {
+    const res = await apiFetch(`${API}/attendance/bulk`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ pupil_ids: pupilIds, attendance_date: date, status: 'Present' })
@@ -718,4 +963,4 @@ setEyeButton('fees');
 fillClassSelect(document.getElementById('filter-class'), '', '', 'All Classes');
 fillClassSelect(document.getElementById('attendance-class'), '', '', 'All Classes');
 ensureAttendanceDate();
-loadDashboard();
+checkAuth();

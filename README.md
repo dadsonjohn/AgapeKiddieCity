@@ -6,10 +6,23 @@ A lightweight school ERP web application for Agape Kiddie City Academy, built wi
 
 ## Features
 
-- **Dashboard Summary**: Total pupils by section (Crèche, Kindergarten, Primary), fees billed, fees collected, and outstanding balances.
-- **Pupils Directory**: Add, view, search, and filter pupils by section and class (Crèche, Kindergarten 1–2, Primary 1–6).
+- **Accounts & Roles**: Log in or sign up. The first account becomes the administrator; every later sign-up is a teacher. Admins manage pupils, fees, and team accounts. Teachers can view the pupil directory and take attendance.
+- **Dashboard Summary**: Total pupils by section (Crèche, Kindergarten, Primary), fees billed, fees collected, and outstanding balances (admins only).
+- **Pupils Directory**: Add, view, search, and filter pupils by section and class (Crèche, Kindergarten 1–2, Primary 1–6). Duplicate pupils are rejected, and guardian phone numbers must be exactly 10 digits.
 - **Fees & Billing**: Create individual invoices or general invoices for a whole section/class, record partial/full payments (in GHS), auto-calculate balance due, and group invoices by section and class.
 - **Daily Attendance**: Mark every pupil Present, Absent, or Late for any date, with a one-click "Mark All Present" option.
+
+## Accounts and roles
+
+| Role | Can do |
+| --- | --- |
+| **Admin** | Everything: dashboard fee totals, pupils (add/edit/delete), fees and payments, attendance, and team accounts. |
+| **Teacher** | View the pupil directory and take/edit attendance. Fees, money totals, and pupil changes are hidden and blocked by the API. |
+
+- Open the app and choose **Sign Up** for the first account. That account becomes the **Admin**.
+- Later sign-ups automatically become **Teachers**.
+- An admin can open **Team** to promote a teacher to admin, demote an admin, or remove an account.
+- Sessions last 7 days and are stored in a signed, HTTP-only cookie.
 
 ## Folder Structure
 
@@ -19,6 +32,7 @@ Simple ERP/
 ├── server.js               # Local server entry point (app.listen)
 ├── api/index.js            # Vercel serverless entry point
 ├── vercel.json             # Vercel routing config
+├── auth.js                 # Session cookies + role middleware
 ├── supabase.js             # Supabase client (secret key, server-side only)
 ├── constants.js            # Sections and class levels
 ├── package.json            # Node.js dependencies & scripts
@@ -31,12 +45,13 @@ Simple ERP/
 │   ├── apply-schema.js     # Applies schema.sql using SUPABASE_DB_URL
 │   └── migrate-local-to-supabase.js  # Copies erp.db into Supabase
 ├── routes/
+│   ├── auth.js             # Login, signup, logout, account management API
 │   ├── dashboard.js        # Dashboard summary API
 │   ├── pupils.js           # Pupils CRUD API
 │   ├── fees.js             # Fee invoices & payments API
 │   └── attendance.js       # Daily attendance API
 └── public/
-    ├── index.html          # Main frontend page
+    ├── index.html          # Main frontend page (login + app)
     ├── styles.css          # Styling
     └── app.js              # Frontend JavaScript
 ```
@@ -61,6 +76,10 @@ SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
 SUPABASE_SECRET_KEY=sb_secret_...
 SUPABASE_JWKS_URL=https://your-project-ref.supabase.co/auth/v1/.well-known/jwks.json
+
+# Optional but recommended: a long random string used to sign login cookies.
+# If omitted, the server falls back to SUPABASE_SECRET_KEY.
+SESSION_SECRET=replace-with-a-long-random-string
 ```
 
 The secret key is only used by the Express server. Never put it in frontend code or share it publicly.
@@ -74,6 +93,11 @@ Choose **one** of these options.
 1. Open **Supabase Dashboard → SQL Editor**.
 2. Paste the entire contents of `supabase/schema.sql`.
 3. Click **Run**.
+
+> If the database already existed before accounts were added, re-run `schema.sql`
+> once to add the 10-digit guardian-phone constraint and the duplicate-pupil
+> unique index. The API also enforces both rules, so the app keeps working even
+> before the SQL is re-run.
 
 **Option B — from the terminal:**
 
@@ -147,9 +171,12 @@ SUPABASE_URL
 SUPABASE_PUBLISHABLE_KEY
 SUPABASE_SECRET_KEY
 SUPABASE_JWKS_URL
+SESSION_SECRET
 ```
 
-The secret key is server-side only. Do not expose it to the browser or commit it to Git.
+`SESSION_SECRET` is optional; when omitted, the server signs login cookies with
+`SUPABASE_SECRET_KEY`. The secret key is server-side only. Do not expose it to
+the browser or commit it to Git.
 
 ## Health check
 

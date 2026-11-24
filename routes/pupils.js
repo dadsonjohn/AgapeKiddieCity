@@ -2,7 +2,58 @@ const express = require('express');
 const { CLASS_LEVELS, normalizeClassLevel } = require('../constants');
 const { fail, parseId, comparePupils } = require('./helpers');
 
-module.exports = ({ supabase }) => {
+function normalizeName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+}
+
+function normalizePhone(value) {
+  return String(value || '').trim();
+}
+
+function isValidPhone(value) {
+  return /^\d{10}$/.test(normalizePhone(value));
+}
+
+// A pupil is a duplicate when the name matches and either the guardian phone
+// matches, or the same guardian name and class match. The second rule catches
+// repeated entries where the phone was mistyped.
+async function findDuplicatePupil(supabase, { fullName, guardianName, guardianPhone, section, classLevel, excludeId }) {
+  const { data, error } = await supabase
+    .from('pupils')
+    .select('id, full_name, guardian_name, guardian_phone, section, class_level');
+  if (error) throw error;
+
+  const name = normalizeName(fullName);
+  const phone = normalizePhone(guardianPhone);
+  const guardian = normalizeName(guardianName);
+
+  for (const pupil of data || []) {
+    if (excludeId && Number(pupil.id) === Number(excludeId)) continue;
+    if (normalizeName(pupil.full_name) !== name) continue;
+
+    if (normalizePhone(pupil.guardian_phone) === phone) {
+      return { reason: 'phone', pupil };
+    }
+
+    const sameGuardian = normalizeName(pupil.guardian_name) === guardian;
+    const sameClass = pupil.section === section
+      && (pupil.class_level || pupil.section) === (classLevel || section);
+
+    if (sameGuardian && sameClass) {
+      return { reason: 'class', pupil };
+    }
+  }
+
+  return null;
+}
+
+function duplicateMessage(duplicate) {
+  return duplicate.reason === 'phone'
+    ? 'This pupil is already registered with the same name and guardian phone.'
+    : 'This pupil is already registered in the same class with the same guardian name.';
+}
+
+module.exports = ({ supabase, requireAdmin }) => {
   const router = express.Router();
 
   // GET all pupils, with optional section/class filter and search
@@ -49,64 +100,120 @@ module.exports = ({ supabase }) => {
     }
   });
 
-  // CREATE a new pupil
-  router.post('/', async (req, res) => {
+  // CREATE a new pupil (admin only)
+  router.post('/', requireAdmin, async (req, res) => {
     try {
-      const { full_name, section, class_level, guardian_name, guardian_phone, enrollment_status } = req.body;
+      const fullName = String(req.body.full_name || '').trim().replace(/\s+/g, ' ');
+      const section = req.body.section;
+      const guardianName = String(req.body.guardian_name || '').trim().replace(/\s+/g, ' ');
+      const guardianPhone = normalizePhone(req.body.guardian_phone);
+      const enrollmentStatus = req.body.enrollment_status || 'Active';
 
-      if (!full_name || !section || !guardian_name || !guardian_phone) {
+      if (!fullName || !section || !guardianName || !guardianPhone) {
         return res.status(400).json({ error: 'All fields are required' });
       }
       if (!CLASS_LEVELS[section]) {
         return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
       }
+      if (!isValidPhone(guardianPhone)) {
+        return res.status(400).json({ error: 'Guardian phone must be exactly 10 digits (numbers only).' });
+      }
+
+      const classLevel = normalizeClassLevel(section, req.body.class_level);
+      const duplicate = await findDuplicatePupil(supabase, {
+        fullName,
+        guardianName,
+        guardianPhone,
+        section,
+        classLevel
+      });
+      if (duplicate) {
+        return res.status(409).json({ error: duplicateMessage(duplicate) });
+      }
 
       const { data, error } = await supabase
         .from('pupils')
         .insert({
-          full_name,
+          full_name: fullName,
           section,
-          class_level: normalizeClassLevel(section, class_level),
-          guardian_name,
-          guardian_phone,
-          enrollment_status: enrollment_status || 'Active'
+          class_level: classLevel,
+          guardian_name: guardianName,
+          guardian_phone: guardianPhone,
+          enrollment_status: enrollmentStatus
         })
         .select()
         .single();
 
-      if (error) throw error;
+      if (error) {
+        // A database-level unique index may reject a duplicate that slipped
+        // past the check above (for example during simultaneous requests).
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'This pupil already exists.' });
+        }
+        throw error;
+      }
+
       res.status(201).json(data);
     } catch (err) {
       fail(res, err, 'Failed to create pupil');
     }
   });
 
-  // UPDATE a pupil
-  router.put('/:id', async (req, res) => {
+  // UPDATE a pupil (admin only)
+  router.put('/:id', requireAdmin, async (req, res) => {
     try {
       const id = parseId(req.params.id);
       if (!id) return res.status(404).json({ error: 'Pupil not found' });
 
-      const { full_name, section, class_level, guardian_name, guardian_phone, enrollment_status } = req.body;
+      const fullName = String(req.body.full_name || '').trim().replace(/\s+/g, ' ');
+      const section = req.body.section;
+      const guardianName = String(req.body.guardian_name || '').trim().replace(/\s+/g, ' ');
+      const guardianPhone = normalizePhone(req.body.guardian_phone);
+      const enrollmentStatus = req.body.enrollment_status || 'Active';
+
+      if (!fullName || !section || !guardianName || !guardianPhone) {
+        return res.status(400).json({ error: 'All fields are required' });
+      }
       if (!CLASS_LEVELS[section]) {
         return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
+      }
+      if (!isValidPhone(guardianPhone)) {
+        return res.status(400).json({ error: 'Guardian phone must be exactly 10 digits (numbers only).' });
+      }
+
+      const classLevel = normalizeClassLevel(section, req.body.class_level);
+      const duplicate = await findDuplicatePupil(supabase, {
+        fullName,
+        guardianName,
+        guardianPhone,
+        section,
+        classLevel,
+        excludeId: id
+      });
+      if (duplicate) {
+        return res.status(409).json({ error: duplicateMessage(duplicate) });
       }
 
       const { data, error } = await supabase
         .from('pupils')
         .update({
-          full_name,
+          full_name: fullName,
           section,
-          class_level: normalizeClassLevel(section, class_level),
-          guardian_name,
-          guardian_phone,
-          enrollment_status: enrollment_status || 'Active'
+          class_level: classLevel,
+          guardian_name: guardianName,
+          guardian_phone: guardianPhone,
+          enrollment_status: enrollmentStatus
         })
         .eq('id', id)
         .select()
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        if (error.code === '23505') {
+          return res.status(409).json({ error: 'This pupil already exists.' });
+        }
+        throw error;
+      }
       if (!data) return res.status(404).json({ error: 'Pupil not found' });
 
       res.json(data);
@@ -115,8 +222,8 @@ module.exports = ({ supabase }) => {
     }
   });
 
-  // DELETE a pupil
-  router.delete('/:id', async (req, res) => {
+  // DELETE a pupil (admin only)
+  router.delete('/:id', requireAdmin, async (req, res) => {
     try {
       const id = parseId(req.params.id);
       if (!id) return res.status(404).json({ error: 'Pupil not found' });

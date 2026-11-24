@@ -17,7 +17,7 @@ A lightweight school ERP web app for **Agape Kiddie City Academy**.
 - **Vercel project:** https://vercel.com/dadsonjohn/agape-kiddie-city
 - **Old production URL:** `agape-kiddie-city.vercel.app` — now 307-redirects to `agapekiddiecity.vercel.app`.
 
-> ⚠️ There is **no authentication**. Anyone with the URL can read and modify all data. Add auth before using this for real student/financial records beyond a demo.
+> 🔐 **Authentication is enabled.** Accounts use Supabase Auth (email + password). The first account created becomes the **Admin**; every later sign-up is a **Teacher**. Admins manage pupils, fees, and team accounts. Teachers can view the pupil directory and take attendance. See section 7 for details.
 
 ---
 
@@ -38,6 +38,13 @@ A lightweight school ERP web app for **Agape Kiddie City Academy**.
 10. Make the deployed link visible on GitHub.
 11. Commit/push all changes to GitHub.
 
+### Follow-up requirements (implemented)
+
+12. Add login and sign-up with two profiles: **Admin** and **Teacher**.
+    - First account = Admin; later accounts = Teacher.
+13. Reject duplicate pupil entries.
+14. Restrict the guardian phone to exactly 10 digits (numbers only).
+
 ---
 
 ## 3. Architecture
@@ -55,6 +62,9 @@ Browser (vanilla JS)  →  Express API  →  Supabase Postgres
 - `server.js` is the local entry point: `require('./app')`, checks the DB, `app.listen`.
 - `api/index.js` is the Vercel entry point: `module.exports = require('../app')`.
 - The server uses the Supabase **secret key** (bypasses RLS). The key never reaches the browser; all DB access is server-side.
+- Accounts live in **Supabase Auth** (`auth.users`); roles are stored in each user's `user_metadata.role`. Password hashing and email/password login are handled by Supabase.
+- `auth.js` signs a 7-day HTTP-only session cookie (HMAC-SHA256) and exposes `requireAuth` / `requireAdmin` middleware. The cookie secret is `SESSION_SECRET` or, if unset, `SUPABASE_SECRET_KEY`.
+- The browser loads the SPA shell, then calls `GET /api/auth/me`. Unauthenticated visitors see the login/sign-up screen. Every data API is protected server-side.
 - Frontend is served by Express from `public/`. On Vercel, `public/**` is bundled into the function via `vercel.json` `includeFiles`.
 
 ### Why not `@supabase/server`
@@ -81,18 +91,20 @@ Do not reintroduce `@supabase/server` without testing the Vercel deployment.
 | `api/index.js` | Vercel serverless entry (exports `app.js`) |
 | `vercel.json` | `functions.includeFiles: public/**`; rewrite `/(.*)` → `/api` |
 | `.vercelignore` | Keeps `.env`, `erp.db`, logs, `node_modules`, `.git` out of Vercel uploads |
+| `auth.js` | Supabase auth client, signed session cookie, `attachUser`, `requireAuth`, `requireAdmin` |
 | `supabase.js` | Creates the Supabase client and `checkConnection()` |
 | `constants.js` | `SECTIONS`, `CLASS_LEVELS`, `CLASS_ORDER`, `SECTION_ORDER`, `sectionForClass`, `normalizeClassLevel`, `sectionRank`, `classRank` |
 | `routes/helpers.js` | `fail`, `parseId`, `comparePupils`, `mapInvoice`, `compareInvoices` |
-| `routes/pupils.js` | Pupil CRUD + section/class/search filtering |
+| `routes/auth.js` | Signup, login, logout, `/me`, admin account management |
+| `routes/pupils.js` | Pupil CRUD + section/class/search filtering + duplicate/phone validation |
 | `routes/fees.js` | Invoice listing, single + bulk invoices, payments |
 | `routes/attendance.js` | Roster/date reads, single + bulk upserts, summary |
 | `routes/dashboard.js` | Dashboard totals and per-section pupil counts |
 | `supabase/schema.sql` | Full schema, indexes, RLS, `service_role` grants |
 | `scripts/apply-schema.js` | Applies `schema.sql` over `SUPABASE_DB_URL` (`npm run setup`) |
 | `scripts/migrate-local-to-supabase.js` | One-time copy of `erp.db` into Supabase (`npm run migrate`) |
-| `public/index.html` | Single-page UI (Dashboard, Pupils, Fees, Attendance) |
-| `public/app.js` | All frontend logic (masking, filters, modals, grouped fees, attendance auto-save) |
+| `public/index.html` | Single-page UI (login/sign-up, Dashboard, Pupils, Fees, Attendance, Team) |
+| `public/app.js` | All frontend logic (auth, role UI, masking, filters, modals, grouped fees, attendance auto-save) |
 | `public/styles.css` | Styling, grouped invoice view, eye button, attendance, responsive rules |
 | `README.md` | Public setup + deployment docs (includes the live URL) |
 | `erp.db` | Old SQLite database, kept only as a backup; gitignored |
@@ -152,6 +164,14 @@ attendance(
 
 Indexes exist on pupils.section, pupils.class_level, fee_invoices.pupil_id, fee_invoices(term, academic_year), payments.invoice_id, attendance.attendance_date, attendance.pupil_id.
 
+Accounts are stored in **Supabase Auth** (`auth.users`), not in a custom table. Each user's `user_metadata.role` is `'admin'` or `'teacher'`, and `user_metadata.full_name` holds the display name. Supabase handles password hashing, email confirmation (bypassed on signup via `admin.createUser`), and password login.
+
+`supabase/schema.sql` also adds:
+- `pupils_guardian_phone_10_digits` — `check (guardian_phone ~ '^[0-9]{10}$')`
+- `pupils_unique_name_phone_idx` — unique on `(lower(btrim(full_name)), guardian_phone)`
+
+> If the database predates the accounts/validation work, re-run `schema.sql` once in the Supabase SQL Editor. The API enforces both rules independently, so nothing breaks before the SQL is re-run.
+
 **RLS is enabled with no public policies.** Only the `service_role` (secret key) can read/write. The publishable/anon key cannot access data.
 
 Important data rules:
@@ -159,12 +179,30 @@ Important data rules:
 - Bulk invoice creation skips pupils who already have an invoice for the **same term + academic year**, regardless of amount/description.
 - Attendance uses an upsert on `(pupil_id, attendance_date)`.
 - Deleting a pupil cascades to their invoices, payments, and attendance.
+- Guardian phone must be exactly 10 digits. The API rejects anything else and the form strips non-digits as you type.
+- A pupil is rejected as a duplicate when the name matches and either the guardian phone matches, or the same guardian name + section + class match. The database unique index is a second safety net.
+- The first account to sign up becomes Admin; later accounts become Teacher. An admin can change roles on the Team page. The last admin cannot be demoted or deleted, and admins cannot change/delete their own account.
+- Role changes take effect on the affected user's next login (the signed cookie carries the role for up to 7 days). Removing an account blocks future logins; an existing cookie remains valid until it expires.
 
 ---
 
 ## 6. API endpoints
 
 All return JSON. Errors: `{ "error": "message" }` with an appropriate status.
+
+### Authentication endpoints
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| POST | `/api/auth/signup` | Public | `full_name`, `email`, `password`; first account = admin, later = teacher |
+| POST | `/api/auth/login` | Public | `email`, `password`; sets the session cookie |
+| POST | `/api/auth/logout` | Public | Clears the session cookie |
+| GET | `/api/auth/me` | Signed in | Returns the current user |
+| GET | `/api/auth/users` | Admin | Lists all accounts |
+| PATCH | `/api/auth/users/:id` | Admin | `{ role: "admin" \| "teacher" }`; cannot change own role or remove the last admin |
+| DELETE | `/api/auth/users/:id` | Admin | Removes an account; cannot delete self or the last admin |
+
+### Data endpoints
 
 | Method | Path | Notes |
 |---|---|---|
@@ -189,13 +227,22 @@ All return JSON. Errors: `{ "error": "message" }` with an appropriate status.
 | GET | `/api/attendance/summary/:date` | Per-section `total_pupils`, `total_marked`, `present`, `absent`, `late` |
 | DELETE | `/api/attendance/:id` | Delete a record |
 
+Role rules enforced in `app.js` and the routers:
+- `/api/fees/*` — **admin only** (403 for teachers).
+- `POST/PUT/DELETE /api/pupils/*` — **admin only**; `GET /api/pupils` is available to both roles.
+- `/api/attendance/*` and `/api/dashboard/summary` — any signed-in user. The dashboard returns fee totals only to admins (`null` for teachers).
+- All data endpoints return 401 when there is no valid session.
+
 ---
 
 ## 7. UI behavior details
 
-- **Dashboard:** total pupils + per-section table; Fees Billed / Collected / Outstanding masked by default (`GHS ••••`) with an eye toggle ("Show amounts" / "Hide amounts").
+- **Login / Sign Up:** full-screen auth card with two tabs. Sign-up asks for full name, email, password, and confirmation. The first account becomes Admin; later accounts become Teacher. The header shows the signed-in name, role badge, and a Log Out button.
+- **Role-based UI:** teachers see Dashboard, Pupils, and Attendance only. Fees/Team links, money cards, Add Pupil, and pupil Edit/Delete controls are hidden. The API enforces the same rules.
+- **Team (admin):** list accounts, promote/demote with a role dropdown, and remove accounts. Your own role/remove controls are disabled.
+- **Dashboard:** total pupils + per-section table; Fees Billed / Collected / Outstanding masked by default (`GHS ••••`) with an eye toggle ("Show amounts" / "Hide amounts"). Fee cards are admin-only.
 - **Fees:** same eye toggle. Grouped by section block (Crèche, Kindergarten, Primary) and then by class, with per-group totals. Buttons: **General Invoice**, **Individual Invoice**, per-row **Pay** / **Delete**.
-- **Pupils:** table with section and class filters, search, add/edit modal. Class dropdown options depend on the selected section (`CLASS_LEVELS` in `constants.js`).
+- **Pupils:** table with section and class filters, search, add/edit modal. Class dropdown options depend on the selected section (`CLASS_LEVELS` in `constants.js`). The guardian phone field accepts digits only and enforces exactly 10; duplicate names + guardian phones (or same name/guardian/class) are rejected with a clear message.
 - **Attendance:** date picker, section/class filters, summary cards per section, full roster for the chosen date. Changing a pupil's status saves automatically (no submit button). **Mark All Present** bulk-marks the currently listed pupils. Unmarked pupils show "Not marked".
 - Amount masking is **client-side display only** (the data is still in the API response).
 
@@ -217,6 +264,8 @@ Connected to Supabase at https://<project>.supabase.co
 Agape Kiddie City Academy ERP running at http://localhost:3000
 ```
 
+Open http://localhost:3000 and choose **Sign Up**. The first account becomes the **Admin**. Later sign-ups are **Teachers**; an admin can promote them from the **Team** page.
+
 The local server currently running on port 3000 was started **before** the `app.js` refactor. It works, but restart it (`Ctrl+C`, then `npm start`) to load the current code.
 
 ### Environment variables (`.env`, gitignored)
@@ -226,6 +275,10 @@ SUPABASE_URL=https://yrowehlvxhnjdowohtmd.supabase.co
 SUPABASE_PUBLISHABLE_KEY=<publishable key>
 SUPABASE_SECRET_KEY=<secret key>
 SUPABASE_JWKS_URL=https://yrowehlvxhnjdowohtmd.supabase.co/auth/v1/.well-known/jwks.json
+
+# Optional but recommended: long random string for signing login cookies.
+# Falls back to SUPABASE_SECRET_KEY when omitted.
+SESSION_SECRET=<long random string>
 
 # Optional: only for `npm run setup` (applying schema.sql from the terminal)
 SUPABASE_DB_URL=postgresql://postgres.<ref>:<password>@<host>:5432/postgres
@@ -252,7 +305,7 @@ The schema was already applied via the Supabase SQL Editor and the local data wa
 - Connected via GitHub integration to `dadsonjohn/AgapeKiddieCity`, branch `main`.
 - Every push to `main` triggers a production deployment automatically.
 - Framework preset: **Express**. `vercel.json` routes all requests to `api/index.js`.
-- Environment variables set for **Production and Preview**: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`.
+- Environment variables set for **Production and Preview**: `SUPABASE_URL`, `SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY`, `SUPABASE_JWKS_URL`. `SESSION_SECRET` is optional (falls back to `SUPABASE_SECRET_KEY`).
 - Production domain: `agapekiddiecity.vercel.app`; editing it in **Settings → Domains** created a 307 redirect from the old `agape-kiddie-city.vercel.app`.
 - The GitHub repo's **Website** field and **About** description point to the live app; `README.md` also includes the live link.
 
@@ -288,11 +341,12 @@ Working tree was clean and `main` matched `origin/main` after the last push.
 
 ## 11. Current data state (Supabase)
 
-- Pupils: **11** — Crèche 3, Kindergarten 3, Primary 5.
-- Fee invoices: **12**.
-- Payments: **10**.
-- Attendance: **0** at migration time.
-- Dashboard: **Billed 22,300 / Collected 13,600 / Outstanding 8,700** (GHS).
+- Pupils: **10** — Crèche 1, Kindergarten 3, Primary 6.
+- Fee invoices: **10**.
+- Payments: **8**.
+- Attendance: **10** records.
+- Accounts: **0** at the time this handoff was updated. The first sign-up becomes Admin.
+- Dashboard: **Billed 19,900 / Collected 11,900 / Outstanding 8,000** (GHS).
 
 Existing pupils were backfilled to default class levels (`Kindergarten 1`, `Primary 1`, Crèche → `Crèche`). The user can edit them to the correct levels.
 
@@ -312,7 +366,8 @@ The user was told about these and has not asked to remove them. Do not delete wi
 - `node --check` on server and route files.
 - Local `GET /api/health`, `/api/dashboard/summary`, `/api/pupils`, `/api/fees`.
 - A temporary end-to-end test created a pupil + invoice + payment + attendance, confirmed dashboard totals changed, then deleted the pupil and confirmed totals returned to baseline.
-- Browser checks of the Dashboard, Fees (grouped invoices), and Attendance (full roster, auto-save, mark-all) locally and on the production URL.
+- Authentication matrix (22 checks): first signup → admin, later signup → teacher, login/wrong password, `/me`, admin fees access, teacher 403 on fees and pupil writes, teacher dashboard hides money, admin user list/promote/demote, duplicate pupil rejection, invalid/short phone rejection, and cleanup of temporary accounts.
+- Browser checks of the login screen, admin dashboard (money + eye toggle), pupil create/duplicate alert, Team page, and the teacher view (hidden Fees/Team/Add/Edit controls, attendance roster) locally.
 - `GET /api/health` on both the new domain and the old (redirect) domain.
 
 There is **no automated test suite**. Add one if the project grows.
@@ -327,6 +382,10 @@ There is **no automated test suite**. Add one if the project grows.
 - Sort pupils/invoices by section rank, then class rank, then name (`routes/helpers.js` + `constants.js`).
 - Keep `section` as `Crèche` / `Kindergarten` / `Primary`; `class_level` holds the finer class.
 - Preserve the accented `Crèche` spelling everywhere.
+- Use Supabase Auth for accounts; roles live in `user_metadata.role`. Do not add a separate passwords table.
+- Protect every new data route with `requireAuth`, and use `requireAdmin` for financial or destructive operations.
+- Keep the session cookie `HttpOnly`, `SameSite=Lax`, and `Secure` in production. Never put the session secret in `public/`.
+- Validate guardian phone as exactly 10 digits on both the client and the server, and keep the duplicate-pupil check in `routes/pupils.js` in sync with the DB index.
 - Do not expose the secret key to `public/` or commit `.env`.
 - Keep `vercel.json`/`.vercelignore` intact; removing `includeFiles` breaks static assets on Vercel.
 - After changes, run `node --check` and verify the affected API endpoints. Commit and push to `main` when the user wants it deployed.
@@ -335,9 +394,9 @@ There is **no automated test suite**. Add one if the project grows.
 
 ## 14. Suggested next steps (optional)
 
-1. **Restart the local server** so it runs the refactored `app.js`.
-2. **Add authentication** (Supabase Auth or a simple session login) before storing real student data.
-3. **Clean test data** (John Dadson duplicate invoices, Ama Mensah overpayment) — only with user approval.
-4. **Custom domain** (e.g. `agapekiddiecity.com`): buy/connect it in Vercel → Settings → Domains and update DNS + GitHub/README links.
+1. **Clean test data** (John Dadson duplicate invoices, Ama Mensah overpayment) — only with user approval.
+2. **Custom domain** (e.g. `agapekiddiecity.com`): buy/connect it in Vercel → Settings → Domains and update DNS + GitHub/README links.
+3. **Password reset / change password** — not implemented yet; Supabase Auth supports reset emails and `updateUser`.
+4. **Immediate session revocation** — role changes and account deletion currently take effect at next login or cookie expiry (7 days). Add a per-request Supabase check or shorter TTL if that matters.
 5. Add receipt printing/export (PDF/CSV) and a payments report if requested.
-6. Consider an automated test for bulk invoicing and attendance upserts.
+6. Consider an automated test for bulk invoicing, attendance upserts, and auth/role rules.

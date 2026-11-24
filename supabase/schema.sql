@@ -49,6 +49,24 @@ create table if not exists public.attendance (
 
 create index if not exists pupils_section_idx on public.pupils (section);
 create index if not exists pupils_class_level_idx on public.pupils (class_level);
+
+-- Guardian phone must be exactly 10 digits, and a pupil cannot be entered
+-- twice with the same name + guardian phone. Re-run this file in the Supabase
+-- SQL Editor once to apply these rules to an existing database.
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'pupils_guardian_phone_10_digits'
+  ) then
+    alter table public.pupils
+      add constraint pupils_guardian_phone_10_digits
+      check (guardian_phone ~ '^[0-9]{10}$');
+  end if;
+end $$;
+
+create unique index if not exists pupils_unique_name_phone_idx
+  on public.pupils (lower(btrim(full_name)), guardian_phone);
+
 create index if not exists fee_invoices_pupil_idx on public.fee_invoices (pupil_id);
 create index if not exists fee_invoices_term_idx on public.fee_invoices (term, academic_year);
 create index if not exists payments_invoice_idx on public.payments (invoice_id);
