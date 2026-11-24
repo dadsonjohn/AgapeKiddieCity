@@ -1,14 +1,20 @@
 {
   "name": "simple-school-erp",
   "version": "1.0.0",
-  "description": "Agape Kiddie City Academy local school ERP web application",
+  "description": "Agape Kiddie City Academy school ERP web application (Supabase)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "setup": "node scripts/apply-schema.js",
+    "migrate": "node scripts/migrate-local-to-supabase.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "sql.js": "^1.9.0"
+    "@supabase/server": "^1.9.2",
+    "dotenv": "^18.0.10",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "pg": "^8.23.1"
   }
 }

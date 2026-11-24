@@ -1,6 +1,6 @@
 # Agape Kiddie City Academy ERP
 
-A lightweight, local-first school ERP web application for Agape Kiddie City Academy, built with Node.js, Express, and SQLite. No cloud database required — everything runs on your computer using a local `erp.db` file.
+A lightweight school ERP web application for Agape Kiddie City Academy, built with Node.js, Express, and **Supabase** (Postgres). All records are stored in your Supabase project.
 
 ## Features
 
@@ -13,66 +13,122 @@ A lightweight, local-first school ERP web application for Agape Kiddie City Acad
 
 ```
 Simple ERP/
-├── server.js          # Express server entry point
-├── db.js              # SQLite database setup + seed data
-├── package.json       # Node.js dependencies & scripts
-├── README.md          # This file
-├── erp.db             # Local SQLite database (created on first run)
+├── server.js               # Express server entry point
+├── supabase.js             # Supabase client (secret key, server-side only)
+├── constants.js            # Sections and class levels
+├── package.json            # Node.js dependencies & scripts
+├── .env                    # Your Supabase credentials (never share/commit)
+├── .env.example            # Template for the .env file
+├── erp.db                  # Old local database (kept only as a backup)
+├── supabase/
+│   └── schema.sql          # Tables, indexes and RLS policies
+├── scripts/
+│   ├── apply-schema.js     # Applies schema.sql using SUPABASE_DB_URL
+│   └── migrate-local-to-supabase.js  # Copies erp.db into Supabase
 ├── routes/
-│   ├── dashboard.js   # Dashboard summary API
-│   ├── pupils.js      # Pupils CRUD API
-│   ├── fees.js        # Fee invoices & payments API
-│   └── attendance.js  # Daily attendance API
+│   ├── dashboard.js        # Dashboard summary API
+│   ├── pupils.js           # Pupils CRUD API
+│   ├── fees.js             # Fee invoices & payments API
+│   └── attendance.js       # Daily attendance API
 └── public/
-    ├── index.html     # Main frontend page
-    ├── styles.css     # Styling
-    └── app.js         # Frontend JavaScript
+    ├── index.html          # Main frontend page
+    ├── styles.css          # Styling
+    └── app.js              # Frontend JavaScript
 ```
 
 ## Prerequisites
 
-- [Node.js](https://nodejs.org/) installed (version 14 or higher recommended)
+- [Node.js](https://nodejs.org/) 22 or newer (needed by the one-time migration script)
+- A Supabase project — create one at [supabase.com](https://supabase.com)
 
-## Step-by-Step: Run on Windows Command Prompt
+## 1. Configure Supabase credentials
 
-1. Open **Command Prompt** (`cmd`).
+Open **Supabase Dashboard → Project Settings → API Keys** and copy:
 
-2. Navigate to the project folder:
-   ```
-   cd C:\Users\Deedew\Desktop\Simple ERP
-   ```
+- Project URL
+- Publishable key
+- Secret key
 
-3. Install dependencies:
-   ```
-   npm install
-   ```
+Create a `.env` file in this folder (or copy `.env.example`) and fill it in:
 
-4. Start the server:
-   ```
-   npm start
-   ```
-   or:
-   ```
-   node server.js
-   ```
+```
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_...
+SUPABASE_SECRET_KEY=sb_secret_...
+SUPABASE_JWKS_URL=https://your-project-ref.supabase.co/auth/v1/.well-known/jwks.json
+```
 
-5. You should see:
-   ```
-   Agape Kiddie City Academy ERP running at http://localhost:3000
-   ```
+The secret key is only used by the Express server. Never put it in frontend code or share it publicly.
 
-6. Open your browser and go to:
-   ```
-   http://localhost:3000
-   ```
+## 2. Create the database tables
 
-## Sample Data
+Choose **one** of these options.
 
-On first run, the app automatically seeds the database with:
-- 10 sample pupils across Crèche, Kindergarten, and Primary sections
-- 10 fee invoices (Term 1, 2024-2025) with a mix of Paid, Partial, and Unpaid statuses
+**Option A — Supabase SQL Editor (easiest):**
 
-You can immediately test the dashboard, fees, and attendance features.
+1. Open **Supabase Dashboard → SQL Editor**.
+2. Paste the entire contents of `supabase/schema.sql`.
+3. Click **Run**.
+
+**Option B — from the terminal:**
+
+Add your database connection string to `.env` (Supabase Dashboard → Project Settings → Database → Connection string → URI):
+
+```
+SUPABASE_DB_URL=postgresql://postgres.your-project-ref:<password>@<host>:5432/postgres
+```
+
+Then run:
+
+```
+npm run setup
+```
+
+## 3. Migrate your existing local data (optional)
+
+Your old data still lives in `erp.db`. To copy it into Supabase:
+
+```
+npm run migrate
+```
+
+If Supabase already contains data and you want to replace it:
+
+```
+npm run migrate -- --force
+```
+
+The local `erp.db` is never modified, so it remains available as a backup.
+
+## 4. Run the app
+
+```
+npm start
+```
+
+You should see:
+
+```
+Connected to Supabase at https://your-project-ref.supabase.co
+Agape Kiddie City Academy ERP running at http://localhost:3000
+```
+
+Open http://localhost:3000 in your browser.
+
+If the server reports that tables are missing, repeat step 2.
+
+## Useful commands
+
+| Command | Purpose |
+| --- | --- |
+| `npm start` | Start the app |
+| `npm run setup` | Apply `supabase/schema.sql` using `SUPABASE_DB_URL` |
+| `npm run migrate` | Copy `erp.db` into Supabase |
+| `npm run migrate -- --force` | Wipe Supabase data, then copy `erp.db` |
+
+## Health check
+
+`GET /api/health` returns `{ "ok": true, "database": "supabase" }` when the server can reach the database, or a helpful error when the schema is missing.
 
 ## Stopping the Server
 

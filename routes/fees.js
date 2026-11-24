@@ -1,53 +1,34 @@
 const express = require('express');
+const { SECTIONS, CLASS_ORDER } = require('../constants');
+const { fail, parseId, mapInvoice, compareInvoices } = require('./helpers');
 
-const CLASS_LEVELS = [
-  'Crèche',
-  'Kindergarten 1',
-  'Kindergarten 2',
-  'Primary 1',
-  'Primary 2',
-  'Primary 3',
-  'Primary 4',
-  'Primary 5',
-  'Primary 6'
-];
+const INVOICE_SELECT = '*, pupil:pupils(full_name, section, class_level)';
 
-const INVOICE_SELECT = `
-  SELECT fi.*,
-         p.full_name AS pupil_name,
-         p.section AS pupil_section,
-         p.class_level AS pupil_class,
-         (fi.amount_billed - fi.amount_paid) AS balance_due
-  FROM fee_invoices fi
-  JOIN pupils p ON fi.pupil_id = p.id
-`;
-
-module.exports = ({ run, get, all }) => {
+module.exports = ({ supabase }) => {
   const router = express.Router();
 
   // GET all fee invoices with pupil info and balance
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     try {
-      const invoices = all(`
-        ${INVOICE_SELECT}
-        ORDER BY
-          CASE p.section WHEN 'Crèche' THEN 1 WHEN 'Kindergarten' THEN 2 ELSE 3 END,
-          p.class_level ASC,
-          p.full_name ASC
-      `);
+      const { data, error } = await supabase
+        .from('fee_invoices')
+        .select(INVOICE_SELECT);
+
+      if (error) throw error;
+
+      const invoices = (data || []).map(mapInvoice).sort(compareInvoices);
       res.json(invoices);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch fee invoices' });
+      fail(res, err, 'Failed to fetch fee invoices');
     }
   });
 
   // CREATE a general invoice for a whole group (section or class)
-  router.post('/bulk', (req, res) => {
+  router.post('/bulk', async (req, res) => {
     try {
       const { target, term, academic_year, amount_billed, description } = req.body;
 
-      const validTargets = ['all', 'Crèche', 'Kindergarten', 'Primary', ...CLASS_LEVELS];
+      const validTargets = ['all', ...SECTIONS, ...CLASS_ORDER];
       if (!target || !validTargets.includes(target)) {
         return res.status(400).json({ error: 'A valid group is required' });
       }
@@ -60,73 +41,94 @@ module.exports = ({ run, get, all }) => {
         return res.status(400).json({ error: 'Amount must be a valid number' });
       }
 
-      let sql = "SELECT * FROM pupils WHERE enrollment_status = 'Active'";
-      const params = [];
+      let pupilQuery = supabase
+        .from('pupils')
+        .select('id')
+        .eq('enrollment_status', 'Active');
 
       if (target !== 'all') {
-        if (['Crèche', 'Kindergarten', 'Primary'].includes(target)) {
-          sql += ' AND section = ?';
-          params.push(target);
+        if (SECTIONS.includes(target)) {
+          pupilQuery = pupilQuery.eq('section', target);
         } else {
-          sql += ' AND class_level = ?';
-          params.push(target);
+          pupilQuery = pupilQuery.eq('class_level', target);
         }
       }
-      sql += ' ORDER BY full_name ASC';
 
-      const pupils = all(sql, params);
+      const { data: pupils, error: pupilError } = await pupilQuery;
+      if (pupilError) throw pupilError;
+
+      if (!pupils || pupils.length === 0) {
+        return res.status(201).json({ target, created: 0, skipped: 0, total_billed: 0 });
+      }
+
+      const pupilIds = pupils.map(pupil => pupil.id);
+
+      // Avoid double-billing a pupil for the same term.
+      const { data: existing, error: existingError } = await supabase
+        .from('fee_invoices')
+        .select('pupil_id')
+        .eq('term', term)
+        .eq('academic_year', academic_year)
+        .in('pupil_id', pupilIds);
+      if (existingError) throw existingError;
+
+      const alreadyInvoiced = new Set((existing || []).map(row => row.pupil_id));
+      const rows = pupilIds
+        .filter(pupilId => !alreadyInvoiced.has(pupilId))
+        .map(pupilId => ({
+          pupil_id: pupilId,
+          term,
+          academic_year,
+          description: description || 'General invoice',
+          amount_billed: amountBilled,
+          amount_paid: 0,
+          status: 'Unpaid'
+        }));
 
       let created = 0;
-      let skipped = 0;
-
-      pupils.forEach(pupil => {
-        const existing = get(
-          'SELECT id FROM fee_invoices WHERE pupil_id = ? AND term = ? AND academic_year = ?',
-          [pupil.id, term, academic_year]
-        );
-
-        // Avoid double-billing a pupil for the same term.
-        if (existing) {
-          skipped += 1;
-          return;
-        }
-
-        run(`
-          INSERT INTO fee_invoices (pupil_id, term, academic_year, description, amount_billed, amount_paid, status)
-          VALUES (?, ?, ?, ?, ?, 0, 'Unpaid')
-        `, [pupil.id, term, academic_year, description || 'General invoice', amountBilled]);
-        created += 1;
-      });
+      if (rows.length > 0) {
+        const { data: inserted, error: insertError } = await supabase
+          .from('fee_invoices')
+          .insert(rows)
+          .select('id');
+        if (insertError) throw insertError;
+        created = (inserted || []).length;
+      }
 
       res.status(201).json({
         target,
         created,
-        skipped,
+        skipped: pupilIds.length - created,
         total_billed: created * amountBilled
       });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to create general invoice' });
+      fail(res, err, 'Failed to create general invoice');
     }
   });
 
   // GET single invoice by id
-  router.get('/:id', (req, res) => {
+  router.get('/:id', async (req, res) => {
     try {
-      const invoice = get(`${INVOICE_SELECT} WHERE fi.id = ?`, [req.params.id]);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Invoice not found' });
 
-      if (!invoice) {
-        return res.status(404).json({ error: 'Invoice not found' });
-      }
-      res.json(invoice);
+      const { data, error } = await supabase
+        .from('fee_invoices')
+        .select(INVOICE_SELECT)
+        .eq('id', id)
+        .maybeSingle();
+
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Invoice not found' });
+
+      res.json(mapInvoice(data));
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch invoice' });
+      fail(res, err, 'Failed to fetch invoice');
     }
   });
 
   // CREATE a new fee invoice for a single pupil
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     try {
       const { pupil_id, term, academic_year, amount_billed, description } = req.body;
 
@@ -134,98 +136,139 @@ module.exports = ({ run, get, all }) => {
         return res.status(400).json({ error: 'All fields are required' });
       }
 
-      const pupil = get('SELECT id FROM pupils WHERE id = ?', [pupil_id]);
-      if (!pupil) {
-        return res.status(404).json({ error: 'Pupil not found' });
-      }
+      const pupilId = parseId(pupil_id);
+      if (!pupilId) return res.status(404).json({ error: 'Pupil not found' });
 
-      const amountBilled = parseFloat(amount_billed) || 0;
+      const { data: pupil, error: pupilError } = await supabase
+        .from('pupils')
+        .select('id')
+        .eq('id', pupilId)
+        .maybeSingle();
+      if (pupilError) throw pupilError;
+      if (!pupil) return res.status(404).json({ error: 'Pupil not found' });
 
-      const info = run(`
-        INSERT INTO fee_invoices (pupil_id, term, academic_year, description, amount_billed, amount_paid, status)
-        VALUES (?, ?, ?, ?, ?, 0, 'Unpaid')
-      `, [pupil_id, term, academic_year, description || null, amountBilled]);
+      const { data, error } = await supabase
+        .from('fee_invoices')
+        .insert({
+          pupil_id: pupilId,
+          term,
+          academic_year,
+          description: description || null,
+          amount_billed: parseFloat(amount_billed) || 0,
+          amount_paid: 0,
+          status: 'Unpaid'
+        })
+        .select(INVOICE_SELECT)
+        .single();
 
-      const newInvoice = get(`${INVOICE_SELECT} WHERE fi.id = ?`, [info.lastInsertRowid]);
-      res.status(201).json(newInvoice);
+      if (error) throw error;
+      res.status(201).json(mapInvoice(data));
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to create fee invoice' });
+      fail(res, err, 'Failed to create fee invoice');
     }
   });
 
   // RECORD a payment against an invoice
-  router.post('/:id/payments', (req, res) => {
+  router.post('/:id/payments', async (req, res) => {
     try {
-      const { amount_paid, note } = req.body;
-      const invoiceId = req.params.id;
+      const invoiceId = parseId(req.params.id);
+      if (!invoiceId) return res.status(404).json({ error: 'Invoice not found' });
 
-      if (!amount_paid || parseFloat(amount_paid) <= 0) {
+      const { amount_paid, note } = req.body;
+      const paymentAmount = parseFloat(amount_paid);
+      if (!Number.isFinite(paymentAmount) || paymentAmount <= 0) {
         return res.status(400).json({ error: 'Valid payment amount is required' });
       }
 
-      const invoice = get('SELECT * FROM fee_invoices WHERE id = ?', [invoiceId]);
-      if (!invoice) {
-        return res.status(404).json({ error: 'Invoice not found' });
-      }
+      const { data: invoice, error: invoiceError } = await supabase
+        .from('fee_invoices')
+        .select('*')
+        .eq('id', invoiceId)
+        .maybeSingle();
+      if (invoiceError) throw invoiceError;
+      if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
-      const paymentAmount = parseFloat(amount_paid);
-      const newAmountPaid = invoice.amount_paid + paymentAmount;
+      const oldAmountPaid = Number(invoice.amount_paid || 0);
+      const newAmountPaid = oldAmountPaid + paymentAmount;
 
-      let status = invoice.status;
-      if (newAmountPaid >= invoice.amount_billed) {
+      let status = 'Unpaid';
+      if (newAmountPaid >= Number(invoice.amount_billed)) {
         status = 'Paid';
       } else if (newAmountPaid > 0) {
         status = 'Partial';
-      } else {
-        status = 'Unpaid';
       }
 
-      run(`
-        UPDATE fee_invoices
-        SET amount_paid = ?, status = ?
-        WHERE id = ?
-      `, [newAmountPaid, status, invoiceId]);
+      const { error: updateError } = await supabase
+        .from('fee_invoices')
+        .update({ amount_paid: newAmountPaid, status })
+        .eq('id', invoiceId);
+      if (updateError) throw updateError;
 
-      run(`
-        INSERT INTO payments (invoice_id, amount_paid, note)
-        VALUES (?, ?, ?)
-      `, [invoiceId, paymentAmount, note || null]);
+      const { error: paymentError } = await supabase
+        .from('payments')
+        .insert({ invoice_id: invoiceId, amount_paid: paymentAmount, note: note || null });
 
-      const updatedInvoice = get(`${INVOICE_SELECT} WHERE fi.id = ?`, [invoiceId]);
-      res.status(201).json({ invoice: updatedInvoice });
+      if (paymentError) {
+        // Undo the invoice update if the payment row could not be written.
+        await supabase
+          .from('fee_invoices')
+          .update({ amount_paid: oldAmountPaid, status: invoice.status })
+          .eq('id', invoiceId);
+        throw paymentError;
+      }
+
+      const { data: updated, error: fetchError } = await supabase
+        .from('fee_invoices')
+        .select(INVOICE_SELECT)
+        .eq('id', invoiceId)
+        .single();
+      if (fetchError) throw fetchError;
+
+      res.status(201).json({ invoice: mapInvoice(updated) });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to record payment' });
+      fail(res, err, 'Failed to record payment');
     }
   });
 
   // GET payments for an invoice
-  router.get('/:id/payments', (req, res) => {
+  router.get('/:id/payments', async (req, res) => {
     try {
-      const payments = all(`
-        SELECT * FROM payments WHERE invoice_id = ? ORDER BY payment_date DESC
-      `, [req.params.id]);
-      res.json(payments);
+      const invoiceId = parseId(req.params.id);
+      if (!invoiceId) return res.status(404).json({ error: 'Invoice not found' });
+
+      const { data, error } = await supabase
+        .from('payments')
+        .select('*')
+        .eq('invoice_id', invoiceId)
+        .order('payment_date', { ascending: false });
+
+      if (error) throw error;
+      res.json(data || []);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch payments' });
+      fail(res, err, 'Failed to fetch payments');
     }
   });
 
   // DELETE a fee invoice
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', async (req, res) => {
     try {
-      const existing = get('SELECT id FROM fee_invoices WHERE id = ?', [req.params.id]);
-      if (!existing) {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Invoice not found' });
+
+      const { data, error } = await supabase
+        .from('fee_invoices')
+        .delete()
+        .eq('id', id)
+        .select('id');
+
+      if (error) throw error;
+      if (!data || data.length === 0) {
         return res.status(404).json({ error: 'Invoice not found' });
       }
 
-      run('DELETE FROM fee_invoices WHERE id = ?', [req.params.id]);
       res.json({ message: 'Fee invoice deleted successfully' });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to delete fee invoice' });
+      fail(res, err, 'Failed to delete fee invoice');
     }
   });
 

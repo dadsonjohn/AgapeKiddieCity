@@ -1,55 +1,43 @@
 const express = require('express');
+const { SECTIONS } = require('../constants');
+const { fail } = require('./helpers');
 
-module.exports = ({ run, get, all }) => {
+module.exports = ({ supabase }) => {
   const router = express.Router();
 
   // Dashboard summary: totals by section, fees billed/collected/outstanding
-  router.get('/summary', (req, res) => {
+  router.get('/summary', async (req, res) => {
     try {
-      // Pupils by section
-      const pupilsBySection = all(`
-        SELECT section, COUNT(*) as count
-        FROM pupils
-        GROUP BY section
-      `);
+      const [pupilResult, invoiceResult] = await Promise.all([
+        supabase.from('pupils').select('id, section'),
+        supabase.from('fee_invoices').select('amount_billed, amount_paid')
+      ]);
 
-      // Ensure all sections appear even if no pupils
-      const sections = ['Crèche', 'Kindergarten', 'Primary'];
+      if (pupilResult.error) throw pupilResult.error;
+      if (invoiceResult.error) throw invoiceResult.error;
+
+      const pupils = pupilResult.data || [];
+      const invoices = invoiceResult.data || [];
+
       const sectionCounts = {};
-      sections.forEach(s => sectionCounts[s] = 0);
-      pupilsBySection.forEach(r => { sectionCounts[r.section] = r.count; });
+      SECTIONS.forEach(section => { sectionCounts[section] = 0; });
+      pupils.forEach(pupil => {
+        if (sectionCounts[pupil.section] === undefined) sectionCounts[pupil.section] = 0;
+        sectionCounts[pupil.section] += 1;
+      });
 
-      const totalPupilsRow = get('SELECT COUNT(*) as count FROM pupils');
-      const totalPupils = totalPupilsRow ? totalPupilsRow.count : 0;
-
-      // Fees summary (get() returns a single object, not an array)
-      const feeSummary = get(`
-        SELECT
-          COALESCE(SUM(amount_billed), 0) as total_billed,
-          COALESCE(SUM(amount_paid), 0) as total_collected
-        FROM fee_invoices
-      `);
-
-      const totalBilled = feeSummary ? feeSummary.total_billed : 0;
-      const totalCollected = feeSummary ? feeSummary.total_collected : 0;
-      const outstandingBalance = totalBilled - totalCollected;
-
-      // Pupil count per section detail
-      const pupilsPerSection = sections.map(s => ({
-        section: s,
-        count: sectionCounts[s]
-      }));
+      const totalBilled = invoices.reduce((sum, invoice) => sum + Number(invoice.amount_billed || 0), 0);
+      const totalCollected = invoices.reduce((sum, invoice) => sum + Number(invoice.amount_paid || 0), 0);
 
       res.json({
-        totalPupils,
-        pupilsPerSection,
+        totalPupils: pupils.length,
+        pupilsPerSection: SECTIONS.map(section => ({ section, count: sectionCounts[section] })),
         totalBilled,
         totalCollected,
-        outstandingBalance
+        outstandingBalance: totalBilled - totalCollected
       });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to load dashboard summary' });
+      fail(res, err, 'Failed to load dashboard summary');
     }
   });
 

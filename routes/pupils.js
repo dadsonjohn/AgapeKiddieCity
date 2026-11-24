@@ -1,74 +1,56 @@
 const express = require('express');
+const { CLASS_LEVELS, normalizeClassLevel } = require('../constants');
+const { fail, parseId, comparePupils } = require('./helpers');
 
-const CLASS_LEVELS = {
-  'Crèche': ['Crèche'],
-  'Kindergarten': ['Kindergarten 1', 'Kindergarten 2'],
-  'Primary': ['Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6']
-};
-
-function normalizeClassLevel(section, classLevel) {
-  const allowed = CLASS_LEVELS[section];
-  if (!allowed) return null;
-  return allowed.includes(classLevel) ? classLevel : allowed[0];
-}
-
-module.exports = ({ run, get, all }) => {
+module.exports = ({ supabase }) => {
   const router = express.Router();
 
   // GET all pupils, with optional section/class filter and search
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     try {
-      let sql = 'SELECT * FROM pupils';
-      const params = [];
-      const conditions = [];
+      let query = supabase.from('pupils').select('*');
 
       if (req.query.section) {
-        conditions.push('section = ?');
-        params.push(req.query.section);
+        query = query.eq('section', req.query.section);
       }
       if (req.query.class_level) {
-        conditions.push('class_level = ?');
-        params.push(req.query.class_level);
+        query = query.eq('class_level', req.query.class_level);
       }
       if (req.query.search) {
-        conditions.push('(full_name LIKE ? OR guardian_name LIKE ?)');
-        params.push(`%${req.query.search}%`, `%${req.query.search}%`);
+        const term = String(req.query.search).replace(/[%,()]/g, ' ').trim();
+        if (term) {
+          const pattern = `%${term}%`;
+          query = query.or(`full_name.ilike.${pattern},guardian_name.ilike.${pattern}`);
+        }
       }
 
-      if (conditions.length > 0) {
-        sql += ' WHERE ' + conditions.join(' AND ');
-      }
-      sql += `
-        ORDER BY
-          CASE section WHEN 'Crèche' THEN 1 WHEN 'Kindergarten' THEN 2 ELSE 3 END,
-          class_level ASC,
-          full_name ASC
-      `;
+      const { data, error } = await query;
+      if (error) throw error;
 
-      const pupils = all(sql, params);
-      res.json(pupils);
+      res.json((data || []).sort(comparePupils));
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch pupils' });
+      fail(res, err, 'Failed to fetch pupils');
     }
   });
 
   // GET single pupil by id
-  router.get('/:id', (req, res) => {
+  router.get('/:id', async (req, res) => {
     try {
-      const pupil = get('SELECT * FROM pupils WHERE id = ?', [req.params.id]);
-      if (!pupil) {
-        return res.status(404).json({ error: 'Pupil not found' });
-      }
-      res.json(pupil);
+      const id = parseId(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Pupil not found' });
+
+      const { data, error } = await supabase.from('pupils').select('*').eq('id', id).maybeSingle();
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Pupil not found' });
+
+      res.json(data);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to fetch pupil' });
+      fail(res, err, 'Failed to fetch pupil');
     }
   });
 
   // CREATE a new pupil
-  router.post('/', (req, res) => {
+  router.post('/', async (req, res) => {
     try {
       const { full_name, section, class_level, guardian_name, guardian_phone, enrollment_status } = req.body;
 
@@ -79,63 +61,75 @@ module.exports = ({ run, get, all }) => {
         return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
       }
 
-      const classLevel = normalizeClassLevel(section, class_level);
+      const { data, error } = await supabase
+        .from('pupils')
+        .insert({
+          full_name,
+          section,
+          class_level: normalizeClassLevel(section, class_level),
+          guardian_name,
+          guardian_phone,
+          enrollment_status: enrollment_status || 'Active'
+        })
+        .select()
+        .single();
 
-      const info = run(`
-        INSERT INTO pupils (full_name, section, class_level, guardian_name, guardian_phone, enrollment_status)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [full_name, section, classLevel, guardian_name, guardian_phone, enrollment_status || 'Active']);
-
-      const newPupil = get('SELECT * FROM pupils WHERE id = ?', [info.lastInsertRowid]);
-      res.status(201).json(newPupil);
+      if (error) throw error;
+      res.status(201).json(data);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to create pupil' });
+      fail(res, err, 'Failed to create pupil');
     }
   });
 
   // UPDATE a pupil
-  router.put('/:id', (req, res) => {
+  router.put('/:id', async (req, res) => {
     try {
-      const { full_name, section, class_level, guardian_name, guardian_phone, enrollment_status } = req.body;
+      const id = parseId(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Pupil not found' });
 
-      const existing = get('SELECT id FROM pupils WHERE id = ?', [req.params.id]);
-      if (!existing) {
-        return res.status(404).json({ error: 'Pupil not found' });
-      }
+      const { full_name, section, class_level, guardian_name, guardian_phone, enrollment_status } = req.body;
       if (!CLASS_LEVELS[section]) {
         return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
       }
 
-      const classLevel = normalizeClassLevel(section, class_level);
+      const { data, error } = await supabase
+        .from('pupils')
+        .update({
+          full_name,
+          section,
+          class_level: normalizeClassLevel(section, class_level),
+          guardian_name,
+          guardian_phone,
+          enrollment_status: enrollment_status || 'Active'
+        })
+        .eq('id', id)
+        .select()
+        .maybeSingle();
 
-      run(`
-        UPDATE pupils
-        SET full_name = ?, section = ?, class_level = ?, guardian_name = ?, guardian_phone = ?, enrollment_status = ?
-        WHERE id = ?
-      `, [full_name, section, classLevel, guardian_name, guardian_phone, enrollment_status || 'Active', req.params.id]);
+      if (error) throw error;
+      if (!data) return res.status(404).json({ error: 'Pupil not found' });
 
-      const updated = get('SELECT * FROM pupils WHERE id = ?', [req.params.id]);
-      res.json(updated);
+      res.json(data);
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to update pupil' });
+      fail(res, err, 'Failed to update pupil');
     }
   });
 
   // DELETE a pupil
-  router.delete('/:id', (req, res) => {
+  router.delete('/:id', async (req, res) => {
     try {
-      const existing = get('SELECT id FROM pupils WHERE id = ?', [req.params.id]);
-      if (!existing) {
+      const id = parseId(req.params.id);
+      if (!id) return res.status(404).json({ error: 'Pupil not found' });
+
+      const { data, error } = await supabase.from('pupils').delete().eq('id', id).select('id');
+      if (error) throw error;
+      if (!data || data.length === 0) {
         return res.status(404).json({ error: 'Pupil not found' });
       }
 
-      run('DELETE FROM pupils WHERE id = ?', [req.params.id]);
       res.json({ message: 'Pupil deleted successfully' });
     } catch (err) {
-      console.error(err);
-      res.status(500).json({ error: 'Failed to delete pupil' });
+      fail(res, err, 'Failed to delete pupil');
     }
   });
 
