@@ -16,6 +16,7 @@ create table if not exists public.pupils (
   guardian_name text not null,
   guardian_phone text not null,
   date_of_birth date,
+  gender text,  -- 'Male' | 'Female', optional
   enrollment_status text not null default 'Active',
   created_at timestamptz not null default now()
 );
