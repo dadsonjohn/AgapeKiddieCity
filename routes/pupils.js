@@ -100,9 +100,6 @@ module.exports = ({ supabase, requireAdmin }) => {
       if (req.query.class_level) {
         query = query.eq('class_level', req.query.class_level);
       }
-      if (req.query.gender) {
-        query = query.eq('gender', req.query.gender);
-      }
       if (req.query.search) {
         const term = String(req.query.search).replace(/[%,()]/g, ' ').trim();
         if (term) {
@@ -266,7 +263,6 @@ module.exports = ({ supabase, requireAdmin }) => {
       const guardianPhone = normalizePhone(req.body.guardian_phone);
       const enrollmentStatus = req.body.enrollment_status || 'Active';
       const birthday = normalizeBirthday(req.body.date_of_birth);
-      const gender = String(req.body.gender || '').trim();
 
       if (!fullName || !section || !guardianName || !guardianPhone) {
         return res.status(400).json({ error: 'All fields are required' });
@@ -296,7 +292,6 @@ module.exports = ({ supabase, requireAdmin }) => {
         enrollment_status: enrollmentStatus
       };
       if (birthday) payload.date_of_birth = birthday;
-      if (gender) payload.gender = gender;
 
       let { data, error } = await supabase
         .from('pupils')

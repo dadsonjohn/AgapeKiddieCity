@@ -15,7 +15,6 @@
 -- 1. Optional birthday
 -- ---------------------------------------------------------------------------
 alter table public.pupils add column if not exists date_of_birth date;
-alter table public.pupils add column if not exists gender text;
 
 -- ---------------------------------------------------------------------------
 -- 2. Guardian phone rule + duplicate-pupil protection
