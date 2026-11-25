@@ -1,13 +1,16 @@
-const SECTIONS = ['Crèche', 'Kindergarten', 'Primary'];
+const SECTIONS = ['Crèche', 'Nursery', 'Kindergarten', 'Primary'];
 
 const CLASS_LEVELS = {
   'Crèche': ['Crèche'],
+  'Nursery': ['Nursery 1', 'Nursery 2'],
   'Kindergarten': ['Kindergarten 1', 'Kindergarten 2'],
   'Primary': ['Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6']
 };
 
 const CLASS_ORDER = [
   'Crèche',
+  'Nursery 1',
+  'Nursery 2',
   'Kindergarten 1',
   'Kindergarten 2',
   'Primary 1',
@@ -18,11 +21,12 @@ const CLASS_ORDER = [
   'Primary 6'
 ];
 
-const SECTION_ORDER = ['Crèche', 'Kindergarten', 'Primary'];
+const SECTION_ORDER = ['Crèche', 'Nursery', 'Kindergarten', 'Primary'];
 
 function sectionForClass(className) {
   if (className && className.startsWith('Primary')) return 'Primary';
   if (className && className.startsWith('Kindergarten')) return 'Kindergarten';
+  if (className && className.startsWith('Nursery')) return 'Nursery';
   return 'Crèche';
 }
 

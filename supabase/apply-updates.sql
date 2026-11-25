@@ -12,9 +12,15 @@
 -- (supabase/schema.sql contains the same changes for a fresh database.)
 
 -- ---------------------------------------------------------------------------
--- 1. Optional birthday
+-- 1. Optional birthday + gender
 -- ---------------------------------------------------------------------------
 alter table public.pupils add column if not exists date_of_birth date;
+alter table public.pupils add column if not exists gender text;
+
+-- Register the Nursery section (Nursery 1 / Nursery 2 class levels).
+insert into public.sections (name)
+values ('Crèche'), ('Nursery'), ('Kindergarten'), ('Primary')
+on conflict (name) do nothing;
 
 -- ---------------------------------------------------------------------------
 -- 2. Guardian phone rule + duplicate-pupil protection

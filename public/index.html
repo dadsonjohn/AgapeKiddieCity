@@ -130,11 +130,17 @@
         <select id="filter-section" onchange="onPupilSectionFilterChange()">
           <option value="">All Sections</option>
           <option value="Crèche">Crèche</option>
+          <option value="Nursery">Nursery</option>
           <option value="Kindergarten">Kindergarten</option>
           <option value="Primary">Primary</option>
         </select>
         <select id="filter-class" onchange="loadPupils()">
           <option value="">All Classes</option>
+        </select>
+        <select id="filter-gender" onchange="loadPupils()">
+          <option value="">All Genders</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
         </select>
         <input type="text" id="filter-search" placeholder="Search by name or guardian" oninput="loadPupils()" />
       </div>
@@ -148,6 +154,7 @@
         <thead>
           <tr>
             <th>Full Name</th>
+            <th>Gender</th>
             <th>Class</th>
             <th>Birthday</th>
             <th>Guardian Name</th>
@@ -223,6 +230,7 @@
           <select id="attendance-section" onchange="onAttendanceSectionChange()">
             <option value="">All Sections</option>
             <option value="Crèche">Crèche</option>
+            <option value="Nursery">Nursery</option>
             <option value="Kindergarten">Kindergarten</option>
             <option value="Primary">Primary</option>
           </select>
@@ -284,6 +292,7 @@
             <select id="msg-section" onchange="onMsgSectionChange()">
               <option value="">All Sections</option>
               <option value="Crèche">Crèche</option>
+              <option value="Nursery">Nursery</option>
               <option value="Kindergarten">Kindergarten</option>
               <option value="Primary">Primary</option>
             </select>
@@ -387,6 +396,7 @@
             <label>Section</label>
             <select id="pupil-section" onchange="onPupilFormSectionChange()" required>
               <option value="Crèche">Crèche</option>
+              <option value="Nursery">Nursery</option>
               <option value="Kindergarten">Kindergarten</option>
               <option value="Primary">Primary</option>
             </select>
@@ -414,6 +424,14 @@
           <select id="pupil-enrollment-status">
             <option value="Active">Active</option>
             <option value="Inactive">Inactive</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Gender <span class="muted">(optional)</span></label>
+          <select id="pupil-gender">
+            <option value="">Select gender</option>
+            <option value="Male">Male</option>
+            <option value="Female">Female</option>
           </select>
         </div>
         <button type="submit" class="btn btn-primary">Save</button>
@@ -466,6 +484,9 @@
           <select id="batch-target" required>
             <option value="all">All Pupils</option>
             <option value="Crèche">Crèche (whole section)</option>
+            <option value="Nursery">Nursery (whole section)</option>
+            <option value="Nursery 1">Nursery 1</option>
+            <option value="Nursery 2">Nursery 2</option>
             <option value="Kindergarten">Kindergarten (whole section)</option>
             <option value="Kindergarten 1">Kindergarten 1</option>
             <option value="Kindergarten 2">Kindergarten 2</option>

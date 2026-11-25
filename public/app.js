@@ -243,11 +243,12 @@ function digitsOnly(input) {
 // --- Class definitions ---
 const CLASS_LEVELS = {
   'Crèche': ['Crèche'],
+  'Nursery': ['Nursery 1', 'Nursery 2'],
   'Kindergarten': ['Kindergarten 1', 'Kindergarten 2'],
   'Primary': ['Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6']
 };
-const SECTION_ORDER = ['Crèche', 'Kindergarten', 'Primary'];
-const CLASS_ORDER = ['Crèche', 'Kindergarten 1', 'Kindergarten 2', 'Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6'];
+const SECTION_ORDER = ['Crèche', 'Nursery', 'Kindergarten', 'Primary'];
+const CLASS_ORDER = ['Crèche', 'Nursery 1', 'Nursery 2', 'Kindergarten 1', 'Kindergarten 2', 'Primary 1', 'Primary 2', 'Primary 3', 'Primary 4', 'Primary 5', 'Primary 6'];
 
 // --- Money visibility (eye toggle) ---
 const amountVisibility = { dashboard: false, fees: false };
@@ -410,10 +411,12 @@ async function loadPupils() {
   try {
     const section = document.getElementById('filter-section').value;
     const classLevel = document.getElementById('filter-class').value;
+    const gender = document.getElementById('filter-gender')?.value || '';
     const search = document.getElementById('filter-search').value;
     let url = `${API}/pupils?`;
     if (section) url += `section=${encodeURIComponent(section)}&`;
     if (classLevel) url += `class_level=${encodeURIComponent(classLevel)}&`;
+    if (gender) url += `gender=${encodeURIComponent(gender)}&`;
     if (search) url += `search=${encodeURIComponent(search)}&`;
 
     const [pupilRes, requestRes] = await Promise.all([
@@ -453,6 +456,7 @@ async function loadPupils() {
       const tr = document.createElement('tr');
       tr.innerHTML = `
         <td>${escapeHtml(p.full_name)}${pendingBadge}</td>
+        <td>${escapeHtml(p.gender || '')}</td>
         <td>${escapeHtml(p.class_level || p.section)}</td>
         <td>${escapeHtml(formatDate(p.date_of_birth))}</td>
         <td>${escapeHtml(p.guardian_name)}</td>
@@ -464,7 +468,7 @@ async function loadPupils() {
     });
 
     if (pupils.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No pupils found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No pupils found.</td></tr>';
     }
 
     renderDeleteRequests(requests);
@@ -579,6 +583,7 @@ function openPupilModal(pupil = null) {
     document.getElementById('pupil-date-of-birth').value = pupil.date_of_birth
       ? String(pupil.date_of_birth).slice(0, 10)
       : '';
+    document.getElementById('pupil-gender').value = pupil.gender || '';
     document.getElementById('pupil-enrollment-status').value = pupil.enrollment_status;
   } else {
     title.textContent = 'Add Pupil';
@@ -629,6 +634,7 @@ document.getElementById('pupil-form').addEventListener('submit', async (e) => {
     guardian_name: document.getElementById('pupil-guardian-name').value,
     guardian_phone: phone,
     date_of_birth: document.getElementById('pupil-date-of-birth').value || null,
+    gender: document.getElementById('pupil-gender').value || null,
     enrollment_status: document.getElementById('pupil-enrollment-status').value
   };
 
@@ -794,6 +800,7 @@ function printReceipt() {
 function sectionForClass(className) {
   if (className.startsWith('Primary')) return 'Primary';
   if (className.startsWith('Kindergarten')) return 'Kindergarten';
+  if (className.startsWith('Nursery')) return 'Nursery';
   return 'Crèche';
 }
 
@@ -812,7 +819,7 @@ function renderFeeGroups(invoices) {
     (byClass[className] = byClass[className] || []).push(inv);
   });
 
-  const sectionSlugs = { 'Crèche': 'creche', 'Kindergarten': 'kindergarten', 'Primary': 'primary' };
+  const sectionSlugs = { 'Crèche': 'creche', 'Nursery': 'nursery', 'Kindergarten': 'kindergarten', 'Primary': 'primary' };
   let html = '';
 
   SECTION_ORDER.forEach(section => {

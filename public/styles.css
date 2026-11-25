@@ -526,6 +526,10 @@ table tr:hover {
   border-left-color: #e67e22;
 }
 
+.fee-section-nursery .fee-section-header {
+  border-left-color: #9b59b6;
+}
+
 .fee-section-kindergarten .fee-section-header {
   border-left-color: #27ae60;
 }

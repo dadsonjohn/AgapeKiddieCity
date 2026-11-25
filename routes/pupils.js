@@ -32,6 +32,14 @@ function normalizeBirthday(value) {
   return text;
 }
 
+// Returns null for an empty/invalid gender, or a canonical 'Male'/'Female'.
+function normalizeGender(value) {
+  const text = String(value || '').trim().toLowerCase();
+  if (text === 'male') return 'Male';
+  if (text === 'female') return 'Female';
+  return null;
+}
+
 // A pupil name must be unique across the school. This is intentionally strict:
 // the same child entered twice with a different phone, guardian, or class is
 // still a duplicate. Use the full name (including middle names) to tell two
@@ -89,26 +97,42 @@ function setupRequired(res) {
 module.exports = ({ supabase, requireAdmin }) => {
   const router = express.Router();
 
-  // GET all pupils, with optional section/class filter and search
+  // GET all pupils, with optional section/class/gender filter and search
   router.get('/', async (req, res) => {
     try {
-      let query = supabase.from('pupils').select('*');
+      const gender = normalizeGender(req.query.gender);
+      const buildQuery = (includeGender) => {
+        let query = supabase.from('pupils').select('*');
 
-      if (req.query.section) {
-        query = query.eq('section', req.query.section);
-      }
-      if (req.query.class_level) {
-        query = query.eq('class_level', req.query.class_level);
-      }
-      if (req.query.search) {
-        const term = String(req.query.search).replace(/[%,()]/g, ' ').trim();
-        if (term) {
-          const pattern = `%${term}%`;
-          query = query.or(`full_name.ilike.${pattern},guardian_name.ilike.${pattern}`);
+        if (req.query.section) {
+          query = query.eq('section', req.query.section);
         }
+        if (req.query.class_level) {
+          query = query.eq('class_level', req.query.class_level);
+        }
+        if (includeGender && gender) {
+          query = query.eq('gender', gender);
+        }
+        if (req.query.search) {
+          const term = String(req.query.search).replace(/[%,()]/g, ' ').trim();
+          if (term) {
+            const pattern = `%${term}%`;
+            query = query.or(`full_name.ilike.${pattern},guardian_name.ilike.${pattern}`);
+          }
+        }
+
+        return query;
+      };
+
+      let { data, error } = await buildQuery(true);
+
+      // Before supabase/apply-updates.sql is run the gender column may not
+      // exist yet. In that case fall back to an unfiltered query so the
+      // directory keeps working.
+      if (error && gender && isMissingColumn(error, 'gender')) {
+        ({ data, error } = await buildQuery(false));
       }
 
-      const { data, error } = await query;
       if (error) throw error;
 
       res.json((data || []).sort(comparePupils));
@@ -263,12 +287,13 @@ module.exports = ({ supabase, requireAdmin }) => {
       const guardianPhone = normalizePhone(req.body.guardian_phone);
       const enrollmentStatus = req.body.enrollment_status || 'Active';
       const birthday = normalizeBirthday(req.body.date_of_birth);
+      const gender = normalizeGender(req.body.gender);
 
       if (!fullName || !section || !guardianName || !guardianPhone) {
         return res.status(400).json({ error: 'All fields are required' });
       }
       if (!CLASS_LEVELS[section]) {
-        return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
+        return res.status(400).json({ error: 'Section must be Crèche, Nursery, Kindergarten, or Primary' });
       }
       if (!isValidPhone(guardianPhone)) {
         return res.status(400).json({ error: 'Guardian phone must be exactly 10 digits (numbers only).' });
@@ -292,6 +317,7 @@ module.exports = ({ supabase, requireAdmin }) => {
         enrollment_status: enrollmentStatus
       };
       if (birthday) payload.date_of_birth = birthday;
+      if (gender) payload.gender = gender;
 
       let { data, error } = await supabase
         .from('pupils')
@@ -300,15 +326,20 @@ module.exports = ({ supabase, requireAdmin }) => {
         .single();
 
       let warning;
-      if (error && isMissingColumn(error, 'date_of_birth')) {
-        // Keep pupil creation working before the database update is applied.
-        delete payload.date_of_birth;
-        ({ data, error } = await supabase
-          .from('pupils')
-          .insert(payload)
-          .select()
-          .single());
-        warning = 'Pupil saved, but birthdays are not set up in the database yet. Run supabase/apply-updates.sql.';
+      if (error) {
+        const missingBirthday = isMissingColumn(error, 'date_of_birth');
+        const missingGender = isMissingColumn(error, 'gender');
+        if (missingBirthday || missingGender) {
+          // Keep pupil creation working before the database update is applied.
+          if (missingBirthday) delete payload.date_of_birth;
+          if (missingGender) delete payload.gender;
+          ({ data, error } = await supabase
+            .from('pupils')
+            .insert(payload)
+            .select()
+            .single());
+          warning = 'Pupil saved, but some optional fields are not set up in the database yet. Run supabase/apply-updates.sql.';
+        }
       }
 
       if (error) {
@@ -338,12 +369,13 @@ module.exports = ({ supabase, requireAdmin }) => {
       const guardianPhone = normalizePhone(req.body.guardian_phone);
       const enrollmentStatus = req.body.enrollment_status || 'Active';
       const birthday = normalizeBirthday(req.body.date_of_birth);
+      const gender = normalizeGender(req.body.gender);
 
       if (!fullName || !section || !guardianName || !guardianPhone) {
         return res.status(400).json({ error: 'All fields are required' });
       }
       if (!CLASS_LEVELS[section]) {
-        return res.status(400).json({ error: 'Section must be Crèche, Kindergarten, or Primary' });
+        return res.status(400).json({ error: 'Section must be Crèche, Nursery, Kindergarten, or Primary' });
       }
       if (!isValidPhone(guardianPhone)) {
         return res.status(400).json({ error: 'Guardian phone must be exactly 10 digits (numbers only).' });
@@ -365,7 +397,8 @@ module.exports = ({ supabase, requireAdmin }) => {
         guardian_name: guardianName,
         guardian_phone: guardianPhone,
         enrollment_status: enrollmentStatus,
-        date_of_birth: birthday
+        date_of_birth: birthday,
+        gender
       };
 
       let { data, error } = await supabase
@@ -376,15 +409,20 @@ module.exports = ({ supabase, requireAdmin }) => {
         .maybeSingle();
 
       let warning;
-      if (error && isMissingColumn(error, 'date_of_birth')) {
-        delete payload.date_of_birth;
-        ({ data, error } = await supabase
-          .from('pupils')
-          .update(payload)
-          .eq('id', id)
-          .select()
-          .maybeSingle());
-        warning = 'Pupil saved, but birthdays are not set up in the database yet. Run supabase/apply-updates.sql.';
+      if (error) {
+        const missingBirthday = isMissingColumn(error, 'date_of_birth');
+        const missingGender = isMissingColumn(error, 'gender');
+        if (missingBirthday || missingGender) {
+          if (missingBirthday) delete payload.date_of_birth;
+          if (missingGender) delete payload.gender;
+          ({ data, error } = await supabase
+            .from('pupils')
+            .update(payload)
+            .eq('id', id)
+            .select()
+            .maybeSingle());
+          warning = 'Pupil saved, but some optional fields are not set up in the database yet. Run supabase/apply-updates.sql.';
+        }
       }
 
       if (error) {
