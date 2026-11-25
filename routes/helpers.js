@@ -5,6 +5,20 @@ function fail(res, err, message) {
   return res.status(500).json({ error: message });
 }
 
+// PostgREST reports a missing table as PGRST205 (its schema cache), while a
+// direct Postgres connection reports 42P01. Accept both.
+function isMissingTable(error) {
+  return Boolean(error) && (error.code === '42P01' || error.code === 'PGRST205');
+}
+
+function isMissingColumn(error, column) {
+  if (!error) return false;
+  const missing = error.code === '42703' || error.code === 'PGRST204';
+  if (!missing) return false;
+  if (!column) return true;
+  return String(error.message || '').toLowerCase().includes(String(column).toLowerCase());
+}
+
 function parseId(value) {
   const text = String(value ?? '');
   return /^\d+$/.test(text) ? Number(text) : null;
@@ -39,4 +53,12 @@ function compareInvoices(a, b) {
     || String(a.pupil_name || '').localeCompare(String(b.pupil_name || ''));
 }
 
-module.exports = { fail, parseId, comparePupils, mapInvoice, compareInvoices };
+module.exports = {
+  fail,
+  parseId,
+  comparePupils,
+  mapInvoice,
+  compareInvoices,
+  isMissingTable,
+  isMissingColumn
+};

@@ -1,5 +1,5 @@
 const express = require('express');
-const { SECTIONS } = require('../constants');
+const { SECTIONS, CLASS_ORDER, sectionForClass } = require('../constants');
 const { fail, parseId } = require('./helpers');
 
 const ATTENDANCE_SELECT = '*, pupil:pupils!inner(full_name, section, class_level)';
@@ -12,6 +12,10 @@ function mapRecord(row) {
     pupil_section: pupil ? pupil.section : '',
     pupil_class: pupil && pupil.class_level ? pupil.class_level : (pupil ? pupil.section : '')
   };
+}
+
+function classForPupil(pupil) {
+  return pupil.class_level || pupil.section;
 }
 
 module.exports = ({ supabase }) => {
@@ -70,6 +74,62 @@ module.exports = ({ supabase }) => {
       res.json(records);
     } catch (err) {
       fail(res, err, 'Failed to fetch attendance for date');
+    }
+  });
+
+  // GET daily attendance analytics for the last N days.
+  router.get('/analytics', async (req, res) => {
+    try {
+      const requested = Number(req.query.days);
+      const days = Number.isFinite(requested) && requested > 0
+        ? Math.min(Math.floor(requested), 90)
+        : 14;
+
+      const since = new Date();
+      since.setDate(since.getDate() - (days - 1));
+      const sinceISO = since.toISOString().slice(0, 10);
+
+      const [attendanceResult, pupilResult] = await Promise.all([
+        supabase
+          .from('attendance')
+          .select('attendance_date, status')
+          .gte('attendance_date', sinceISO)
+          .order('attendance_date', { ascending: false }),
+        supabase.from('pupils').select('id')
+      ]);
+
+      if (attendanceResult.error) throw attendanceResult.error;
+      if (pupilResult.error) throw pupilResult.error;
+
+      const byDate = {};
+      (attendanceResult.data || []).forEach(record => {
+        const date = record.attendance_date;
+        if (!byDate[date]) {
+          byDate[date] = { date, present: 0, absent: 0, late: 0, marked: 0 };
+        }
+        const entry = byDate[date];
+        entry.marked += 1;
+        if (record.status === 'Present') entry.present += 1;
+        else if (record.status === 'Absent') entry.absent += 1;
+        else if (record.status === 'Late') entry.late += 1;
+      });
+
+      const history = Object.values(byDate)
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)))
+        .map(entry => ({
+          ...entry,
+          percent_present: entry.marked
+            ? Math.round((entry.present / entry.marked) * 100)
+            : 0
+        }));
+
+      res.json({
+        days: history,
+        total_pupils: (pupilResult.data || []).length,
+        window_days: days
+      });
+    } catch (err) {
+      fail(res, err, 'Failed to load attendance analytics');
     }
   });
 
@@ -149,16 +209,16 @@ module.exports = ({ supabase }) => {
     }
   });
 
-  // GET attendance summary by section and date
+  // GET attendance summary by section and class for a date
   router.get('/summary/:date', async (req, res) => {
     try {
       const date = req.params.date;
 
       const [pupilResult, attendanceResult] = await Promise.all([
-        supabase.from('pupils').select('section'),
+        supabase.from('pupils').select('section, class_level'),
         supabase
           .from('attendance')
-          .select('status, pupil:pupils!inner(section)')
+          .select('status, pupil:pupils!inner(section, class_level)')
           .eq('attendance_date', date)
       ]);
 
@@ -182,7 +242,22 @@ module.exports = ({ supabase }) => {
         };
       });
 
-      res.json({ date, summary });
+      const classes = CLASS_ORDER.map(className => {
+        const totalPupils = pupils.filter(pupil => classForPupil(pupil) === className).length;
+        const classRecords = records.filter(record => record.pupil && classForPupil(record.pupil) === className);
+
+        return {
+          class_level: className,
+          section: sectionForClass(className),
+          total_pupils: totalPupils,
+          total_marked: classRecords.length,
+          present: classRecords.filter(record => record.status === 'Present').length,
+          absent: classRecords.filter(record => record.status === 'Absent').length,
+          late: classRecords.filter(record => record.status === 'Late').length
+        };
+      });
+
+      res.json({ date, summary, classes });
     } catch (err) {
       fail(res, err, 'Failed to fetch attendance summary');
     }

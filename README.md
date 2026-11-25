@@ -6,18 +6,18 @@ A lightweight school ERP web application for Agape Kiddie City Academy, built wi
 
 ## Features
 
-- **Accounts & Roles**: Log in or sign up. The first account becomes the administrator; every later sign-up is a teacher. Admins manage pupils, fees, and team accounts. Teachers can view the pupil directory and take attendance.
-- **Dashboard Summary**: Total pupils by section (Crèche, Kindergarten, Primary), fees billed, fees collected, and outstanding balances (admins only).
-- **Pupils Directory**: Add, view, search, and filter pupils by section and class (Crèche, Kindergarten 1–2, Primary 1–6). Duplicate pupils are rejected, and guardian phone numbers must be exactly 10 digits.
-- **Fees & Billing**: Create individual invoices or general invoices for a whole section/class, record partial/full payments (in GHS), auto-calculate balance due, and group invoices by section and class.
-- **Daily Attendance**: Mark every pupil Present, Absent, or Late for any date, with a one-click "Mark All Present" option.
+- **Accounts & Roles**: Log in or sign up. The first account becomes the administrator; every later sign-up is a teacher. Admins manage pupils, fees, and team accounts. Teachers can add pupils, view the directory, and take attendance; deleting a pupil requires administrator approval.
+- **Dashboard Summary**: Total pupils by section (Crèche, Kindergarten, Primary) and by class (Kindergarten 1–2, Primary 1–6), plus fees billed, fees collected, and outstanding balances (admins only).
+- **Pupils Directory**: Add, view, search, and filter pupils by section and class. An optional birthday can be recorded. Duplicate pupil names are rejected, and guardian phone numbers must be exactly 10 digits.
+- **Fees & Billing**: Create individual invoices or general invoices for a whole section/class, record partial/full payments (in GHS), auto-calculate balance due, and group invoices by section and class. Every payment saves a printable receipt with the school name, pupil, date, amount, balance, and a stamp space.
+- **Daily Attendance**: Mark every pupil Present, Absent, or Late for any date, with a one-click "Mark All Present" option. The attendance page shows present counts per class and a daily attendance history.
 
 ## Accounts and roles
 
 | Role | Can do |
 | --- | --- |
-| **Admin** | Everything: dashboard fee totals, pupils (add/edit/delete), fees and payments, attendance, and team accounts. |
-| **Teacher** | View the pupil directory and take/edit attendance. Fees, money totals, and pupil changes are hidden and blocked by the API. |
+| **Admin** | Everything: dashboard fee totals, pupils (add/edit/delete), approve or reject teacher delete requests, fees and payments, attendance, and team accounts. |
+| **Teacher** | Add pupils, view the pupil directory, take/edit attendance, and request a pupil deletion. Fees, money totals, pupil editing, and direct deletion are hidden and blocked by the API. |
 
 - Open the app and choose **Sign Up** for the first account. That account becomes the **Admin**.
 - Later sign-ups automatically become **Teachers**.
@@ -40,7 +40,8 @@ Simple ERP/
 ├── .env.example            # Template for the .env file
 ├── erp.db                  # Old local database (kept only as a backup)
 ├── supabase/
-│   └── schema.sql          # Tables, indexes and RLS policies
+│   ├── schema.sql          # Full schema for a fresh database
+│   └── apply-updates.sql   # Idempotent update for an existing database
 ├── scripts/
 │   ├── apply-schema.js     # Applies schema.sql using SUPABASE_DB_URL
 │   └── migrate-local-to-supabase.js  # Copies erp.db into Supabase
@@ -94,10 +95,12 @@ Choose **one** of these options.
 2. Paste the entire contents of `supabase/schema.sql`.
 3. Click **Run**.
 
-> If the database already existed before accounts were added, re-run `schema.sql`
-> once to add the 10-digit guardian-phone constraint and the duplicate-pupil
-> unique index. The API also enforces both rules, so the app keeps working even
-> before the SQL is re-run.
+> **Already have a database?** Paste `supabase/apply-updates.sql` into the SQL
+> Editor and run it once. It adds the optional birthday column, saved receipts,
+> teacher delete requests, the strict duplicate-pupil trigger, and the
+> 10-digit guardian-phone rule. It is safe to run more than once. The API keeps
+> working before the update is applied, but birthdays, receipts, and delete
+> requests are only saved after it is run.
 
 **Option B — from the terminal:**
 

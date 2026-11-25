@@ -1,11 +1,34 @@
 const express = require('express');
 const { SECTIONS, CLASS_ORDER } = require('../constants');
-const { fail, parseId, mapInvoice, compareInvoices } = require('./helpers');
+const { fail, parseId, mapInvoice, compareInvoices, isMissingTable, isMissingColumn } = require('./helpers');
 
 const INVOICE_SELECT = '*, pupil:pupils(full_name, section, class_level)';
 
 module.exports = ({ supabase }) => {
   const router = express.Router();
+
+  // GET every saved receipt (partial and full payments), newest first.
+  // Defined before /:id so "receipts" is not treated as an invoice id.
+  router.get('/receipts', async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from('receipts')
+        .select('*')
+        .order('paid_on', { ascending: false })
+        .order('id', { ascending: false });
+
+      if (error) {
+        if (isMissingTable(error)) {
+          return res.json({ receipts: [], setupRequired: true });
+        }
+        throw error;
+      }
+
+      res.json({ receipts: data || [] });
+    } catch (err) {
+      fail(res, err, 'Failed to fetch receipts');
+    }
+  });
 
   // GET all fee invoices with pupil info and balance
   router.get('/', async (req, res) => {
@@ -168,7 +191,7 @@ module.exports = ({ supabase }) => {
     }
   });
 
-  // RECORD a payment against an invoice
+  // RECORD a payment against an invoice and save a printable receipt.
   router.post('/:id/payments', async (req, res) => {
     try {
       const invoiceId = parseId(req.params.id);
@@ -182,17 +205,19 @@ module.exports = ({ supabase }) => {
 
       const { data: invoice, error: invoiceError } = await supabase
         .from('fee_invoices')
-        .select('*')
+        .select(INVOICE_SELECT)
         .eq('id', invoiceId)
         .maybeSingle();
       if (invoiceError) throw invoiceError;
       if (!invoice) return res.status(404).json({ error: 'Invoice not found' });
 
-      const oldAmountPaid = Number(invoice.amount_paid || 0);
+      const mappedInvoice = mapInvoice(invoice);
+      const billed = Number(mappedInvoice.amount_billed || 0);
+      const oldAmountPaid = Number(mappedInvoice.amount_paid || 0);
       const newAmountPaid = oldAmountPaid + paymentAmount;
 
       let status = 'Unpaid';
-      if (newAmountPaid >= Number(invoice.amount_billed)) {
+      if (newAmountPaid >= billed) {
         status = 'Paid';
       } else if (newAmountPaid > 0) {
         status = 'Partial';
@@ -204,9 +229,11 @@ module.exports = ({ supabase }) => {
         .eq('id', invoiceId);
       if (updateError) throw updateError;
 
-      const { error: paymentError } = await supabase
+      const { data: payment, error: paymentError } = await supabase
         .from('payments')
-        .insert({ invoice_id: invoiceId, amount_paid: paymentAmount, note: note || null });
+        .insert({ invoice_id: invoiceId, amount_paid: paymentAmount, note: note || null })
+        .select()
+        .single();
 
       if (paymentError) {
         // Undo the invoice update if the payment row could not be written.
@@ -217,6 +244,52 @@ module.exports = ({ supabase }) => {
         throw paymentError;
       }
 
+      let receipt = null;
+      let setupRequired = false;
+
+      const receiptPayload = {
+        payment_id: payment.id,
+        invoice_id: invoiceId,
+        pupil_id: invoice.pupil_id,
+        pupil_name: mappedInvoice.pupil_name,
+        pupil_class: mappedInvoice.pupil_class,
+        term: invoice.term,
+        academic_year: invoice.academic_year,
+        description: invoice.description || null,
+        amount_paid: paymentAmount,
+        amount_billed: billed,
+        total_paid: newAmountPaid,
+        balance_after: Math.max(0, billed - newAmountPaid),
+        payment_type: status === 'Paid' ? 'Full' : 'Partial',
+        note: note || null,
+        issued_by: req.user ? (req.user.full_name || req.user.email) : null
+      };
+
+      const { data: receiptData, error: receiptError } = await supabase
+        .from('receipts')
+        .insert(receiptPayload)
+        .select()
+        .single();
+
+      if (receiptError) {
+        if (isMissingTable(receiptError) || isMissingColumn(receiptError)) {
+          // Keep payments working before the database update is applied.
+          setupRequired = true;
+          console.warn('[Fees] Receipts are not set up yet:', receiptError.message);
+        } else {
+          // Roll the whole payment back so the invoice and payment rows stay
+          // consistent if the receipt could not be saved.
+          await supabase.from('payments').delete().eq('id', payment.id);
+          await supabase
+            .from('fee_invoices')
+            .update({ amount_paid: oldAmountPaid, status: invoice.status })
+            .eq('id', invoiceId);
+          throw receiptError;
+        }
+      } else {
+        receipt = receiptData;
+      }
+
       const { data: updated, error: fetchError } = await supabase
         .from('fee_invoices')
         .select(INVOICE_SELECT)
@@ -224,7 +297,11 @@ module.exports = ({ supabase }) => {
         .single();
       if (fetchError) throw fetchError;
 
-      res.status(201).json({ invoice: mapInvoice(updated) });
+      res.status(201).json({
+        invoice: mapInvoice(updated),
+        receipt,
+        setupRequired
+      });
     } catch (err) {
       fail(res, err, 'Failed to record payment');
     }

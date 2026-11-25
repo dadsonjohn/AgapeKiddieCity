@@ -297,6 +297,20 @@ function todayISO() {
   return local.toISOString().slice(0, 10);
 }
 
+function formatDate(value) {
+  if (!value) return '—';
+  const text = String(value).slice(0, 10);
+  const parts = text.split('-').map(Number);
+  if (parts.length !== 3 || parts.some(part => !Number.isFinite(part))) return text;
+  return new Date(parts[0], parts[1] - 1, parts[2]).toLocaleDateString();
+}
+
+function formatDateTime(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '—' : date.toLocaleString();
+}
+
 // --- Class select helpers ---
 function classOptionsFor(section) {
   if (!section) return Object.values(CLASS_LEVELS).flat();
@@ -369,6 +383,14 @@ async function loadDashboard() {
       tr.innerHTML = `<td>${s.section}</td><td>${s.count}</td>`;
       tbody.appendChild(tr);
     });
+
+    const classBody = document.getElementById('class-table-body');
+    classBody.innerHTML = '';
+    (data.pupilsPerClass || []).forEach(c => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td>${escapeHtml(c.class_level)}</td><td>${escapeHtml(c.section)}</td><td>${c.count}</td>`;
+      classBody.appendChild(tr);
+    });
   } catch (err) {
     console.error(err);
     alert('Failed to load dashboard');
@@ -392,33 +414,142 @@ async function loadPupils() {
     if (classLevel) url += `class_level=${encodeURIComponent(classLevel)}&`;
     if (search) url += `search=${encodeURIComponent(search)}&`;
 
-    const res = await apiFetch(url);
-    const pupils = await res.json();
+    const [pupilRes, requestRes] = await Promise.all([
+      apiFetch(url),
+      apiFetch(`${API}/pupils/delete-requests`).catch(() => null)
+    ]);
+    const pupils = await pupilRes.json();
+
+    let requests = [];
+    if (requestRes && requestRes.ok) {
+      const payload = await requestRes.json();
+      requests = payload.requests || [];
+    }
+
+    const pendingByPupil = {};
+    requests
+      .filter(request => request.status === 'Pending' && request.pupil_id)
+      .forEach(request => { pendingByPupil[request.pupil_id] = request; });
 
     const tbody = document.getElementById('pupils-table-body');
     tbody.innerHTML = '';
+    const isAdmin = currentUser && currentUser.role === 'admin';
+
     pupils.forEach(p => {
+      const pending = pendingByPupil[p.id];
+      const pendingBadge = pending
+        ? ' <span class="badge badge-warning">Delete pending</span>'
+        : '';
+
+      const actions = isAdmin
+        ? `<button class="btn btn-sm btn-primary" onclick="editPupil(${p.id})">Edit</button>
+           <button class="btn btn-sm btn-danger" onclick="deletePupil(${p.id})">Delete</button>`
+        : (pending
+          ? '<span class="muted">Awaiting admin</span>'
+          : `<button class="btn btn-sm btn-danger" onclick="requestDeletePupil(${p.id})">Request Delete</button>`);
+
       const tr = document.createElement('tr');
       tr.innerHTML = `
-        <td>${escapeHtml(p.full_name)}</td>
+        <td>${escapeHtml(p.full_name)}${pendingBadge}</td>
         <td>${escapeHtml(p.class_level || p.section)}</td>
+        <td>${escapeHtml(formatDate(p.date_of_birth))}</td>
         <td>${escapeHtml(p.guardian_name)}</td>
         <td>${escapeHtml(p.guardian_phone)}</td>
-        <td><span class="status-badge status-${p.enrollment_status}">${p.enrollment_status}</span></td>
-        <td class="row-actions admin-only">
-          <button class="btn btn-sm btn-primary" onclick="editPupil(${p.id})">Edit</button>
-          <button class="btn btn-sm btn-danger" onclick="deletePupil(${p.id})">Delete</button>
-        </td>
+        <td><span class="status-badge status-${p.enrollment_status}">${escapeHtml(p.enrollment_status)}</span></td>
+        <td class="row-actions">${actions}</td>
       `;
       tbody.appendChild(tr);
     });
 
     if (pupils.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">No pupils found.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No pupils found.</td></tr>';
     }
+
+    renderDeleteRequests(requests);
   } catch (err) {
     console.error(err);
     alert('Failed to load pupils');
+  }
+}
+
+function renderDeleteRequests(requests) {
+  const panel = document.getElementById('delete-requests-panel');
+  const list = document.getElementById('delete-requests-list');
+  if (!panel || !list) return;
+
+  if (!currentUser || currentUser.role !== 'admin') {
+    panel.hidden = true;
+    return;
+  }
+
+  const pending = requests.filter(request => request.status === 'Pending');
+  if (!pending.length) {
+    panel.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+
+  panel.hidden = false;
+  list.innerHTML = pending.map(request => `
+    <div class="delete-request-item">
+      <div>
+        <strong>${escapeHtml(request.pupil_name)}</strong>
+        <span class="muted">${escapeHtml(request.pupil_class || '')}</span>
+        <p class="muted">Requested by ${escapeHtml(request.requested_by_name || request.requested_by_email || 'a teacher')} on ${escapeHtml(formatDateTime(request.created_at))}</p>
+        ${request.reason ? `<p class="delete-reason">&ldquo;${escapeHtml(request.reason)}&rdquo;</p>` : ''}
+      </div>
+      <div class="row-actions">
+        <button class="btn btn-sm btn-success" onclick="approveDeleteRequest(${request.id})">Approve &amp; Delete</button>
+        <button class="btn btn-sm btn-secondary" onclick="rejectDeleteRequest(${request.id})">Reject</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+async function requestDeletePupil(id) {
+  const reason = prompt('Reason for deleting this pupil (optional):');
+  if (reason === null) return;
+  if (!confirm('Send a delete request to an administrator for approval?')) return;
+
+  try {
+    const res = await apiFetch(`${API}/pupils/${id}/delete-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: reason.trim() })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to send delete request');
+    alert(data.message || 'Delete request sent to an administrator.');
+    loadPupils();
+  } catch (err) {
+    alert(err.message || 'Failed to send delete request');
+  }
+}
+
+async function approveDeleteRequest(requestId) {
+  if (!confirm('Approve this request and permanently delete the pupil?')) return;
+  try {
+    const res = await apiFetch(`${API}/pupils/delete-requests/${requestId}/approve`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to approve delete request');
+    alert(data.message || 'Pupil deleted.');
+    loadPupils();
+    loadDashboard();
+  } catch (err) {
+    alert(err.message || 'Failed to approve delete request');
+  }
+}
+
+async function rejectDeleteRequest(requestId) {
+  if (!confirm('Reject this delete request?')) return;
+  try {
+    const res = await apiFetch(`${API}/pupils/delete-requests/${requestId}/reject`, { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to reject delete request');
+    alert(data.message || 'Delete request rejected.');
+    loadPupils();
+  } catch (err) {
+    alert(err.message || 'Failed to reject delete request');
   }
 }
 
@@ -443,6 +574,9 @@ function openPupilModal(pupil = null) {
     fillClassSelect(document.getElementById('pupil-class'), pupil.section, pupil.class_level);
     document.getElementById('pupil-guardian-name').value = pupil.guardian_name;
     document.getElementById('pupil-guardian-phone').value = pupil.guardian_phone;
+    document.getElementById('pupil-date-of-birth').value = pupil.date_of_birth
+      ? String(pupil.date_of_birth).slice(0, 10)
+      : '';
     document.getElementById('pupil-enrollment-status').value = pupil.enrollment_status;
   } else {
     title.textContent = 'Add Pupil';
@@ -492,6 +626,7 @@ document.getElementById('pupil-form').addEventListener('submit', async (e) => {
     class_level: document.getElementById('pupil-class').value,
     guardian_name: document.getElementById('pupil-guardian-name').value,
     guardian_phone: phone,
+    date_of_birth: document.getElementById('pupil-date-of-birth').value || null,
     enrollment_status: document.getElementById('pupil-enrollment-status').value
   };
 
@@ -501,10 +636,9 @@ document.getElementById('pupil-form').addEventListener('submit', async (e) => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(pupilData)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to save pupil');
-    }
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to save pupil');
+    if (result.warning) alert(result.warning);
     closePupilModal();
     loadPupils();
     loadDashboard();
@@ -515,15 +649,19 @@ document.getElementById('pupil-form').addEventListener('submit', async (e) => {
 
 // --- Fees ---
 let feeInvoicesCache = [];
+let receiptsCache = [];
 
 async function loadFees() {
   try {
-    const res = await apiFetch(`${API}/fees`);
-    const invoices = await res.json();
+    const [invoiceRes, pupilRes, receiptRes] = await Promise.all([
+      apiFetch(`${API}/fees`),
+      apiFetch(`${API}/pupils`),
+      apiFetch(`${API}/fees/receipts`)
+    ]);
+    const invoices = await invoiceRes.json();
     feeInvoicesCache = invoices;
 
     // Populate pupil dropdown in the individual invoice modal
-    const pupilRes = await apiFetch(`${API}/pupils`);
     const pupils = await pupilRes.json();
     const pupilSelect = document.getElementById('invoice-pupil');
     pupilSelect.innerHTML = '';
@@ -534,6 +672,13 @@ async function loadFees() {
       pupilSelect.appendChild(opt);
     });
 
+    let receipts = [];
+    if (receiptRes.ok) {
+      const payload = await receiptRes.json();
+      receipts = payload.receipts || (Array.isArray(payload) ? payload : []);
+    }
+    receiptsCache = receipts;
+
     // Summary totals
     const totalBilled = invoices.reduce((sum, inv) => sum + Number(inv.amount_billed || 0), 0);
     const totalCollected = invoices.reduce((sum, inv) => sum + Number(inv.amount_paid || 0), 0);
@@ -542,10 +687,106 @@ async function loadFees() {
     setMoneyElement(document.getElementById('fees-outstanding'), totalBilled - totalCollected);
 
     renderFeeGroups(invoices);
+    renderReceipts(receipts);
   } catch (err) {
     console.error(err);
     alert('Failed to load fees');
   }
+}
+
+function renderReceipts(receipts) {
+  const tbody = document.getElementById('receipts-table-body');
+  const count = document.getElementById('receipts-count');
+  if (count) {
+    count.textContent = `${receipts.length} receipt${receipts.length === 1 ? '' : 's'}`;
+  }
+  if (!tbody) return;
+
+  if (!receipts.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No payments recorded yet.</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = receipts.map(receipt => {
+    const type = receipt.payment_type === 'Full' ? 'Paid' : 'Partial';
+    return `
+      <tr>
+        <td>${escapeHtml(formatDate(receipt.paid_on))}</td>
+        <td>${escapeHtml(receipt.receipt_number || '—')}</td>
+        <td>${escapeHtml(receipt.pupil_name || '—')}</td>
+        <td>${escapeHtml(receipt.pupil_class || '—')}</td>
+        <td><span class="money" data-money-scope="fees" data-value="${Number(receipt.amount_paid || 0)}"></span></td>
+        <td><span class="status-badge status-${type}">${escapeHtml(receipt.payment_type || 'Partial')}</span></td>
+        <td><span class="money" data-money-scope="fees" data-value="${Number(receipt.balance_after || 0)}"></span></td>
+        <td class="row-actions">
+          <button class="btn btn-sm btn-primary" onclick="openReceiptModalById(${receipt.id})">Receipt</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  refreshAmounts('fees');
+}
+
+function openReceiptModalById(receiptId) {
+  const receipt = receiptsCache.find(item => Number(item.id) === Number(receiptId));
+  if (receipt) openReceiptModal(receipt);
+}
+
+function openReceiptModal(receipt) {
+  if (!receipt) return;
+
+  const area = document.getElementById('receipt-print-area');
+  if (!area) return;
+
+  const dateText = receipt.paid_on ? new Date(receipt.paid_on).toLocaleDateString() : new Date().toLocaleDateString();
+  const balance = Number(receipt.balance_after || 0);
+  const type = receipt.payment_type || (balance > 0 ? 'Partial' : 'Full');
+  const termYear = [receipt.term, receipt.academic_year].filter(Boolean).join(' / ') || '—';
+
+  area.innerHTML = `
+    <div class="receipt-header">
+      <div class="receipt-logo">AK</div>
+      <div>
+        <h2>Agape Kiddie City Academy</h2>
+        <p>Official Fee Receipt</p>
+      </div>
+    </div>
+    <div class="receipt-meta">
+      <div><span>Receipt No.</span><strong>${escapeHtml(receipt.receipt_number || 'Pending')}</strong></div>
+      <div><span>Date Paid</span><strong>${escapeHtml(dateText)}</strong></div>
+    </div>
+    <table class="receipt-table">
+      <tbody>
+        <tr><th>Student</th><td>${escapeHtml(receipt.pupil_name || '—')}</td></tr>
+        <tr><th>Class</th><td>${escapeHtml(receipt.pupil_class || '—')}</td></tr>
+        <tr><th>Term / Year</th><td>${escapeHtml(termYear)}</td></tr>
+        ${receipt.description ? `<tr><th>Description</th><td>${escapeHtml(receipt.description)}</td></tr>` : ''}
+        <tr><th>Amount Billed</th><td>${formatMoney(receipt.amount_billed)}</td></tr>
+        <tr><th>Amount Paid</th><td><strong>${formatMoney(receipt.amount_paid)}</strong></td></tr>
+        <tr><th>Total Paid to Date</th><td>${formatMoney(receipt.total_paid)}</td></tr>
+        <tr><th>Balance</th><td>${formatMoney(balance)}</td></tr>
+        <tr><th>Payment Type</th><td>${escapeHtml(type)}</td></tr>
+        ${receipt.note ? `<tr><th>Note</th><td>${escapeHtml(receipt.note)}</td></tr>` : ''}
+        ${receipt.issued_by ? `<tr><th>Issued By</th><td>${escapeHtml(receipt.issued_by)}</td></tr>` : ''}
+      </tbody>
+    </table>
+    <div class="receipt-footer">
+      <div class="receipt-thanks">Thank you for your payment.</div>
+      <div class="receipt-stamp"><span>School Stamp</span></div>
+    </div>
+    <p class="receipt-note">This receipt is valid only with the school stamp.</p>
+  `;
+
+  document.getElementById('receipt-modal').style.display = 'flex';
+}
+
+function closeReceiptModal() {
+  document.getElementById('receipt-modal').style.display = 'none';
+}
+
+function printReceipt() {
+  window.print();
 }
 
 function sectionForClass(className) {
@@ -787,13 +1028,18 @@ document.getElementById('payment-form').addEventListener('submit', async (e) => 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(data)
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || 'Failed to record payment');
-    }
+    const result = await res.json();
+    if (!res.ok) throw new Error(result.error || 'Failed to record payment');
+
     closePaymentModal();
     loadFees();
     loadDashboard();
+
+    if (result.receipt) {
+      openReceiptModal(result.receipt);
+    } else if (result.setupRequired) {
+      alert('Payment saved, but the receipts table is not set up yet. Run supabase/apply-updates.sql in Supabase to save receipts.');
+    }
   } catch (err) {
     alert(err.message || 'Failed to record payment');
   }
@@ -838,6 +1084,7 @@ async function loadAttendance() {
     if (pupils.length === 0) {
       tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">No pupils match this filter.</td></tr>';
       loadAttendanceSummary(date);
+      loadAttendanceHistory();
       return;
     }
 
@@ -880,6 +1127,7 @@ async function loadAttendance() {
     });
 
     loadAttendanceSummary(date);
+    loadAttendanceHistory();
   } catch (err) {
     console.error(err);
     alert('Failed to load attendance');
@@ -898,7 +1146,7 @@ async function loadAttendanceSummary(date) {
       const card = document.createElement('div');
       card.className = 'stat-card';
       card.innerHTML = `
-        <h3>${s.section}</h3>
+        <h3>${escapeHtml(s.section)}</h3>
         <p class="summary-line"><span class="status-badge status-Present">${s.present}</span> Present</p>
         <p class="summary-line"><span class="status-badge status-Absent">${s.absent}</span> Absent</p>
         <p class="summary-line"><span class="status-badge status-Late">${s.late}</span> Late</p>
@@ -906,6 +1154,53 @@ async function loadAttendanceSummary(date) {
       `;
       container.appendChild(card);
     });
+
+    const classContainer = document.getElementById('attendance-class-summary');
+    if (classContainer) {
+      classContainer.innerHTML = '';
+      (data.classes || []).forEach(c => {
+        const unmarked = Math.max(0, c.total_pupils - c.total_marked);
+        const card = document.createElement('div');
+        card.className = 'class-card';
+        card.innerHTML = `
+          <h4>${escapeHtml(c.class_level)}</h4>
+          <p class="class-present"><strong>${c.present}</strong> present <span class="muted">/ ${c.total_pupils}</span></p>
+          <p class="summary-line muted">${c.absent} absent &middot; ${c.late} late &middot; ${unmarked} unmarked</p>
+        `;
+        classContainer.appendChild(card);
+      });
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function loadAttendanceHistory() {
+  try {
+    const res = await apiFetch(`${API}/attendance/analytics?days=14`);
+    const data = await res.json();
+    const tbody = document.getElementById('attendance-history-body');
+    if (!tbody) return;
+
+    const days = data.days || [];
+    if (!days.length) {
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-cell">No attendance history yet.</td></tr>';
+      return;
+    }
+
+    tbody.innerHTML = days.map(day => `
+      <tr>
+        <td>${escapeHtml(formatDate(day.date))}</td>
+        <td>${day.present}</td>
+        <td>${day.absent}</td>
+        <td>${day.late}</td>
+        <td>${day.marked}</td>
+        <td>
+          <span class="percent-bar"><span style="width:${Math.max(0, Math.min(100, day.percent_present))}%"></span></span>
+          <span class="muted">${day.percent_present}%</span>
+        </td>
+      </tr>
+    `).join('');
   } catch (err) {
     console.error(err);
   }
@@ -927,6 +1222,7 @@ async function saveAttendance(pupilId, status, selectEl) {
       setTimeout(() => selectEl.classList.remove('saved-flash'), 700);
     }
     loadAttendanceSummary(date);
+    loadAttendanceHistory();
   } catch (err) {
     alert('Failed to update attendance');
   }

@@ -762,3 +762,293 @@ table tr:hover {
     grid-template-columns: 1fr;
   }
 }
+
+.role-admin .teacher-only {
+  display: none !important;
+}
+
+.subheading {
+  margin: 2rem 0 0.75rem;
+  font-size: 1.1rem;
+  color: #2c3e50;
+}
+
+/* --- Class counts and attendance analytics --- */
+.class-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.class-card {
+  background: #fff;
+  border-radius: 8px;
+  padding: 0.9rem 1rem;
+  border-left: 4px solid #3498db;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+}
+
+.class-card h4 {
+  font-size: 0.95rem;
+  color: #2c3e50;
+}
+
+.class-card .class-present {
+  font-size: 1.4rem;
+  font-weight: 700;
+  color: #2c3e50;
+  margin: 0.25rem 0;
+}
+
+.class-card .class-present .muted {
+  font-size: 0.85rem;
+  font-weight: 500;
+}
+
+.class-card .summary-line {
+  justify-content: flex-start;
+  font-size: 0.8rem;
+  margin: 0;
+}
+
+.percent-bar {
+  display: inline-block;
+  width: 90px;
+  height: 8px;
+  margin-right: 0.5rem;
+  border-radius: 999px;
+  background: #e9ecef;
+  overflow: hidden;
+  vertical-align: middle;
+}
+
+.percent-bar span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: #2ecc71;
+}
+
+/* --- Delete requests --- */
+.delete-requests-panel {
+  background: #fff8e6;
+  border: 1px solid #f0d48a;
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  margin-bottom: 1rem;
+}
+
+.delete-requests-panel h3 {
+  font-size: 1rem;
+  color: #7a5b00;
+  margin-bottom: 0.6rem;
+}
+
+.delete-request-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding: 0.7rem 0;
+  border-top: 1px solid #f0d48a;
+}
+
+.delete-request-item:first-child {
+  border-top: none;
+}
+
+.delete-request-item p {
+  font-size: 0.85rem;
+  margin: 0.15rem 0;
+}
+
+.delete-reason {
+  font-style: italic;
+}
+
+.badge-warning {
+  background: #fff3cd;
+  color: #856404;
+}
+
+/* --- Receipts --- */
+.receipts-section {
+  margin-top: 2rem;
+  padding-top: 1.5rem;
+  border-top: 2px solid #e6ebef;
+}
+
+.section-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.5rem;
+}
+
+.section-heading h3 {
+  font-size: 1.2rem;
+  color: #2c3e50;
+}
+
+.receipt-modal-content {
+  max-width: 720px;
+}
+
+.receipt {
+  background: #fff;
+  color: #222;
+  padding: 1.5rem;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+}
+
+.receipt-header {
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
+  padding-bottom: 1rem;
+  border-bottom: 2px solid #2c3e50;
+}
+
+.receipt-logo {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: #3498db;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+.receipt-header h2 {
+  font-size: 1.15rem;
+  color: #2c3e50;
+}
+
+.receipt-header p {
+  font-size: 0.85rem;
+  color: #6c757d;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.receipt-meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+  font-size: 0.85rem;
+}
+
+.receipt-meta span {
+  display: block;
+  color: #7f8c8d;
+  text-transform: uppercase;
+  font-size: 0.7rem;
+  letter-spacing: 0.05em;
+}
+
+.receipt-table {
+  box-shadow: none;
+  border: 1px solid #e6ebef;
+}
+
+.receipt-table th {
+  width: 38%;
+  background: #f8f9fa;
+}
+
+.receipt-table th,
+.receipt-table td {
+  padding: 0.55rem 0.75rem;
+  font-size: 0.9rem;
+}
+
+.receipt-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-top: 1.5rem;
+}
+
+.receipt-thanks {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #2c3e50;
+}
+
+.receipt-stamp {
+  width: 170px;
+  height: 80px;
+  border: 2px dashed #b8c4cd;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #8a969f;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.receipt-note {
+  margin-top: 0.75rem;
+  font-size: 0.72rem;
+  color: #8a969f;
+  text-align: center;
+}
+
+.receipt-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+@media print {
+  body {
+    background: #fff;
+  }
+
+  #app-header,
+  #app-main,
+  #auth-screen,
+  .modal:not(#receipt-modal) {
+    display: none !important;
+  }
+
+  #receipt-modal {
+    display: block !important;
+    position: static;
+    background: #fff;
+    padding: 0;
+    overflow: visible;
+  }
+
+  #receipt-modal .modal-content {
+    max-width: none;
+    width: 100%;
+    max-height: none;
+    overflow: visible;
+    padding: 0;
+    box-shadow: none;
+  }
+
+  #receipt-modal .close,
+  #receipt-modal .receipt-actions {
+    display: none !important;
+  }
+
+  .receipt {
+    border: none;
+    padding: 0;
+  }
+}

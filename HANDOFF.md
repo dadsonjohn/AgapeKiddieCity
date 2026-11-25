@@ -17,7 +17,7 @@ A lightweight school ERP web app for **Agape Kiddie City Academy**.
 - **Vercel project:** https://vercel.com/dadsonjohn/agape-kiddie-city
 - **Old production URL:** `agape-kiddie-city.vercel.app` — now 307-redirects to `agapekiddiecity.vercel.app`.
 
-> 🔐 **Authentication is enabled.** Accounts use Supabase Auth (email + password). The first account created becomes the **Admin**; every later sign-up is a **Teacher**. Admins manage pupils, fees, and team accounts. Teachers can view the pupil directory and take attendance. See section 7 for details.
+> 🔐 **Authentication is enabled.** Accounts use Supabase Auth (email + password). The first account created becomes the **Admin**; every later sign-up is a **Teacher**. Admins manage pupils, fees, and team accounts. Teachers can add pupils, view the pupil directory, take attendance, and request a pupil deletion; an admin must approve the deletion. See section 7 for details.
 
 ---
 
@@ -44,6 +44,12 @@ A lightweight school ERP web app for **Agape Kiddie City Academy**.
     - First account = Admin; later accounts = Teacher.
 13. Reject duplicate pupil entries.
 14. Restrict the guardian phone to exactly 10 digits (numbers only).
+15. Show the number of pupils in **each class** (Kindergarten 1–2, Primary 1–6) on the dashboard.
+16. Add an **optional birthday** to every pupil.
+17. Save a **printable receipt** for every partial or full fee payment, with school name, pupil, date, amount, balance, and a school-stamp space. List all payments/receipts in a dedicated section.
+18. Show **present counts per class** and **daily attendance history** on the attendance page.
+19. Let **teachers add pupils**; deleting a pupil must be **approved by an admin**.
+20. Make duplicate-pupil prevention strict: the same pupil name cannot be added twice even with a different phone, guardian, or class.
 
 ---
 
@@ -94,13 +100,14 @@ Do not reintroduce `@supabase/server` without testing the Vercel deployment.
 | `auth.js` | Supabase auth client, signed session cookie, `attachUser`, `requireAuth`, `requireAdmin` |
 | `supabase.js` | Creates the Supabase client and `checkConnection()` |
 | `constants.js` | `SECTIONS`, `CLASS_LEVELS`, `CLASS_ORDER`, `SECTION_ORDER`, `sectionForClass`, `normalizeClassLevel`, `sectionRank`, `classRank` |
-| `routes/helpers.js` | `fail`, `parseId`, `comparePupils`, `mapInvoice`, `compareInvoices` |
+| `routes/helpers.js` | `fail`, `parseId`, `comparePupils`, `mapInvoice`, `compareInvoices`, `isMissingTable`, `isMissingColumn` |
 | `routes/auth.js` | Signup, login, logout, `/me`, admin account management |
-| `routes/pupils.js` | Pupil CRUD + section/class/search filtering + duplicate/phone validation |
-| `routes/fees.js` | Invoice listing, single + bulk invoices, payments |
-| `routes/attendance.js` | Roster/date reads, single + bulk upserts, summary |
-| `routes/dashboard.js` | Dashboard totals and per-section pupil counts |
-| `supabase/schema.sql` | Full schema, indexes, RLS, `service_role` grants |
+| `routes/pupils.js` | Pupil CRUD, birthday, strict duplicate/phone validation, teacher delete requests |
+| `routes/fees.js` | Invoice listing, single + bulk invoices, payments, saved printable receipts |
+| `routes/attendance.js` | Roster/date reads, single + bulk upserts, per-section/per-class summary, daily analytics |
+| `routes/dashboard.js` | Dashboard totals plus per-section and per-class pupil counts |
+| `supabase/schema.sql` | Full schema for a fresh database, indexes, triggers, RLS, `service_role` grants |
+| `supabase/apply-updates.sql` | Idempotent update for an existing database (birthday, receipts, delete requests, duplicate trigger) |
 | `scripts/apply-schema.js` | Applies `schema.sql` over `SUPABASE_DB_URL` (`npm run setup`) |
 | `scripts/migrate-local-to-supabase.js` | One-time copy of `erp.db` into Supabase (`npm run migrate`) |
 | `public/index.html` | Single-page UI (login/sign-up, Dashboard, Pupils, Fees, Attendance, Team) |
@@ -123,11 +130,12 @@ sections(id bigint pk, name text unique, created_at timestamptz)
 
 pupils(
   id bigint pk,
-  full_name text not null,
+  full_name text not null,           -- unique (case/space-insensitive, enforced by trigger)
   section text not null,             -- 'Crèche' | 'Kindergarten' | 'Primary'
   class_level text,                  -- 'Crèche' | 'Kindergarten 1-2' | 'Primary 1-6'
   guardian_name text not null,
-  guardian_phone text not null,
+  guardian_phone text not null,      -- exactly 10 digits
+  date_of_birth date,                -- optional
   enrollment_status text default 'Active',
   created_at timestamptz
 )
@@ -152,6 +160,28 @@ payments(
   note text
 )
 
+receipts(
+  id bigint pk,
+  receipt_number text unique,        -- AKC-YYYYMMDD-0001
+  payment_id bigint fk → payments(id) on delete set null,
+  invoice_id bigint fk → fee_invoices(id) on delete set null,
+  pupil_id bigint fk → pupils(id) on delete set null,
+  pupil_name text not null,          -- snapshot
+  pupil_class text,                  -- snapshot
+  term text,
+  academic_year text,
+  description text,
+  amount_paid numeric(12,2),         -- this payment
+  amount_billed numeric(12,2),
+  total_paid numeric(12,2),          -- cumulative paid
+  balance_after numeric(12,2),
+  payment_type text,                 -- 'Partial' | 'Full'
+  note text,
+  issued_by text,
+  paid_on timestamptz default now(),
+  created_at timestamptz
+)
+
 attendance(
   id bigint pk,
   pupil_id bigint fk → pupils(id) on delete cascade,
@@ -160,17 +190,36 @@ attendance(
   created_at timestamptz,
   unique (pupil_id, attendance_date)
 )
+
+pupil_delete_requests(
+  id bigint pk,
+  pupil_id bigint fk → pupils(id) on delete set null,
+  pupil_name text not null,          -- snapshot
+  pupil_class text,
+  requested_by_id uuid,              -- auth.users id
+  requested_by_name text,
+  requested_by_email text,
+  reason text,
+  status text default 'Pending',     -- 'Pending' | 'Approved' | 'Rejected'
+  reviewed_by_name text,
+  reviewed_by_email text,
+  reviewed_at timestamptz,
+  created_at timestamptz
+)
 ```
 
-Indexes exist on pupils.section, pupils.class_level, fee_invoices.pupil_id, fee_invoices(term, academic_year), payments.invoice_id, attendance.attendance_date, attendance.pupil_id.
+Indexes exist on pupils.section, pupils.class_level, pupils(lower(btrim(full_name))), fee_invoices.pupil_id, fee_invoices(term, academic_year), payments.invoice_id, receipts(pupil_id), receipts(paid_on), pupil_delete_requests(status, created_at), pupil_delete_requests(pupil_id), attendance.attendance_date, attendance.pupil_id. A partial unique index allows only one pending delete request per pupil.
 
 Accounts are stored in **Supabase Auth** (`auth.users`), not in a custom table. Each user's `user_metadata.role` is `'admin'` or `'teacher'`, and `user_metadata.full_name` holds the display name. Supabase handles password hashing, email confirmation (bypassed on signup via `admin.createUser`), and password login.
 
 `supabase/schema.sql` also adds:
 - `pupils_guardian_phone_10_digits` — `check (guardian_phone ~ '^[0-9]{10}$')`
 - `pupils_unique_name_phone_idx` — unique on `(lower(btrim(full_name)), guardian_phone)`
+- `prevent_duplicate_pupil_name()` trigger — rejects any new/renamed pupil whose normalized full name already exists (case/space-insensitive). Existing duplicates are left untouched, but no new ones can be added.
+- `receipts` — one saved row per payment, with snapshot pupil/invoice data, cumulative total, balance, payment type, receipt number, and `issued_by`.
+- `pupil_delete_requests` — teacher deletion requests with `Pending` / `Approved` / `Rejected` status.
 
-> If the database predates the accounts/validation work, re-run `schema.sql` once in the Supabase SQL Editor. The API enforces both rules independently, so nothing breaks before the SQL is re-run.
+> **Existing database?** Paste `supabase/apply-updates.sql` into the Supabase SQL Editor and run it once. It is idempotent and adds the birthday column, receipts, delete requests, the strict duplicate trigger, and the phone rule. The API keeps working before the update is applied, but birthdays, receipts, and delete requests are only saved after it is run.
 
 **RLS is enabled with no public policies.** Only the `service_role` (secret key) can read/write. The publishable/anon key cannot access data.
 

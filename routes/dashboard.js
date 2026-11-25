@@ -1,17 +1,17 @@
 const express = require('express');
-const { SECTIONS } = require('../constants');
+const { SECTIONS, CLASS_ORDER, sectionForClass } = require('../constants');
 const { fail } = require('./helpers');
 
 module.exports = ({ supabase }) => {
   const router = express.Router();
 
-  // Dashboard summary: totals by section, fees billed/collected/outstanding.
-  // Fee figures are only returned to administrators.
+  // Dashboard summary: totals by section and class, plus fees billed/collected/
+  // outstanding. Fee figures are only returned to administrators.
   router.get('/summary', async (req, res) => {
     try {
       const isAdmin = req.user && req.user.role === 'admin';
 
-      const pupilResult = await supabase.from('pupils').select('id, section');
+      const pupilResult = await supabase.from('pupils').select('id, section, class_level');
       if (pupilResult.error) throw pupilResult.error;
 
       const pupils = pupilResult.data || [];
@@ -22,6 +22,18 @@ module.exports = ({ supabase }) => {
         if (sectionCounts[pupil.section] === undefined) sectionCounts[pupil.section] = 0;
         sectionCounts[pupil.section] += 1;
       });
+
+      const classCounts = {};
+      pupils.forEach(pupil => {
+        const className = pupil.class_level || pupil.section;
+        classCounts[className] = (classCounts[className] || 0) + 1;
+      });
+
+      const pupilsPerClass = CLASS_ORDER.map(className => ({
+        class_level: className,
+        section: sectionForClass(className),
+        count: classCounts[className] || 0
+      }));
 
       let totalBilled = null;
       let totalCollected = null;
@@ -42,6 +54,7 @@ module.exports = ({ supabase }) => {
       res.json({
         totalPupils: pupils.length,
         pupilsPerSection: SECTIONS.map(section => ({ section, count: sectionCounts[section] })),
+        pupilsPerClass,
         totalBilled,
         totalCollected,
         outstandingBalance
