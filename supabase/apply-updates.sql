@@ -177,3 +177,41 @@ grant all on public.receipts, public.pupil_delete_requests to service_role;
 grant usage, select on all sequences in schema public to service_role;
 
 notify pgrst, 'reload schema';
+
+-- ---------------------------------------------------------------------------
+-- SMS messaging (Hellio) -- campaigns + per-recipient delivery log
+-- ---------------------------------------------------------------------------
+create table if not exists public.sms_campaigns (
+  id bigserial primary key,
+  message text not null,
+  sender text,
+  recipient_count integer default 0,
+  status text default 'Sent',
+  provider_response jsonb,
+  sent_by_id uuid,
+  sent_by_name text,
+  sent_by_email text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.sms_recipients (
+  id bigserial primary key,
+  campaign_id bigint references public.sms_campaigns(id) on delete cascade,
+  pupil_id bigint references public.pupils(id) on delete set null,
+  guardian_name text,
+  phone text not null,
+  status text default 'Sent',
+  provider_message_id text,
+  error text,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_sms_campaigns_created on public.sms_campaigns (created_at desc);
+create index if not exists idx_sms_recipients_campaign on public.sms_recipients (campaign_id);
+
+alter table public.sms_campaigns enable row level security;
+alter table public.sms_recipients enable row level security;
+grant all on table public.sms_campaigns to service_role;
+grant all on table public.sms_recipients to service_role;
+grant usage, select on sequence public.sms_campaigns_id_seq to service_role;
+grant usage, select on sequence public.sms_recipients_id_seq to service_role;

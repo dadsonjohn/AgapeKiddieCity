@@ -81,6 +81,11 @@ SUPABASE_JWKS_URL=https://your-project-ref.supabase.co/auth/v1/.well-known/jwks.
 # Optional but recommended: a long random string used to sign login cookies.
 # If omitted, the server falls back to SUPABASE_SECRET_KEY.
 SESSION_SECRET=replace-with-a-long-random-string
+
+# Optional: Hellio Messaging (SMS) — needed for the Messages tab
+HELLIO_API_TOKEN=your-hellio-api-token
+HELLIO_DEFAULT_SENDER=YourApprovedSenderID
+HELLIO_BASE_URL=https://api.helliomessaging.com/v1
 ```
 
 The secret key is only used by the Express server. Never put it in frontend code or share it publicly.
@@ -97,10 +102,11 @@ Choose **one** of these options.
 
 > **Already have a database?** Paste `supabase/apply-updates.sql` into the SQL
 > Editor and run it once. It adds the optional birthday column, saved receipts,
-> teacher delete requests, the strict duplicate-pupil trigger, and the
-> 10-digit guardian-phone rule. It is safe to run more than once. The API keeps
-> working before the update is applied, but birthdays, receipts, and delete
-> requests are only saved after it is run.
+> teacher delete requests, the strict duplicate-pupil trigger, the
+> 10-digit guardian-phone rule, and the SMS message history tables. It is safe
+> to run more than once. The API keeps working before the update is applied, but
+> birthdays, receipts, delete requests, and SMS history are only saved after it
+> is run.
 
 **Option B — from the terminal:**
 

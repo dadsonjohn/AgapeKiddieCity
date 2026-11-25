@@ -1,6 +1,7 @@
 const API = '/api';
 
 let currentUser = null;
+const msgSelected = new Set();
 
 // Wraps fetch so an expired session sends the user back to the login screen.
 async function apiFetch(url, options) {
@@ -60,7 +61,7 @@ function applyRoleUI(user) {
 
   if (!isAdmin) {
     const activePage = document.querySelector('.page.active');
-    if (activePage && (activePage.id === 'fees' || activePage.id === 'team')) {
+    if (activePage && (activePage.id === 'fees' || activePage.id === 'team' || activePage.id === 'messages')) {
       activatePage('dashboard');
     }
   }
@@ -363,6 +364,7 @@ function loadPageData(section) {
     loadAttendance();
   }
   if (section === 'team') loadTeam();
+  if (section === 'messages') { loadMsgRecipients(); loadMsgHistory(); loadMsgConfig(); }
 }
 
 // --- Dashboard ---
@@ -1251,6 +1253,267 @@ async function markAllPresent() {
   } catch (err) {
     alert('Failed to save attendance');
   }
+}
+
+// --- Messages / SMS ---
+function onMsgSectionChange() {
+  const section = document.getElementById('msg-section').value;
+  fillClassSelect(document.getElementById('msg-class'), section, '', 'All Classes');
+  loadMsgRecipients();
+}
+
+async function loadMsgConfig() {
+  try {
+    const res = await apiFetch(`${API}/messages/config`);
+    const data = await res.json();
+    const input = document.getElementById('msg-sender');
+    if (input && !input.value && data.defaultSender) input.value = data.defaultSender;
+  } catch (err) {
+    // ignore; sender can be typed manually
+  }
+}
+
+async function loadMsgRecipients() {
+  try {
+    const section = document.getElementById('msg-section').value;
+    const classLevel = document.getElementById('msg-class').value;
+    const search = document.getElementById('msg-search').value;
+    let url = `${API}/pupils?`;
+    if (section) url += `section=${encodeURIComponent(section)}&`;
+    if (classLevel) url += `class_level=${encodeURIComponent(classLevel)}&`;
+    if (search) url += `search=${encodeURIComponent(search)}&`;
+
+    const res = await apiFetch(url);
+    const pupils = await res.json();
+
+    const tbody = document.getElementById('msg-recipients-body');
+    tbody.innerHTML = '';
+    pupils.forEach(p => {
+      const phone = p.guardian_phone || '';
+      const checked = msgSelected.has(p.id) ? 'checked' : '';
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td><input type="checkbox" data-pupil-id="${p.id}" ${checked} onchange="toggleMsgPupil(${p.id}, this.checked)" /></td>
+        <td>${escapeHtml(p.full_name)}</td>
+        <td>${escapeHtml(p.class_level || p.section)}</td>
+        <td>${escapeHtml(p.guardian_name)}</td>
+        <td>${escapeHtml(phone || '—')}</td>
+      `;
+      tbody.appendChild(tr);
+    });
+
+    if (pupils.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="5" class="empty-cell">No pupils match this filter.</td></tr>';
+    }
+
+    updateMsgSelectAllState();
+    updateMsgRecipientCount();
+  } catch (err) {
+    console.error(err);
+    alert('Failed to load recipients');
+  }
+}
+
+function toggleMsgPupil(id, checked) {
+  if (checked) msgSelected.add(id);
+  else msgSelected.delete(id);
+  updateMsgSelectAllState();
+  updateMsgRecipientCount();
+}
+
+function toggleMsgSelectAll(checked) {
+  const boxes = document.querySelectorAll('#msg-recipients-body input[data-pupil-id]');
+  boxes.forEach(box => {
+    const id = Number(box.dataset.pupilId);
+    box.checked = checked;
+    if (checked) msgSelected.add(id);
+    else msgSelected.delete(id);
+  });
+  updateMsgRecipientCount();
+}
+
+function updateMsgSelectAllState() {
+  const boxes = document.querySelectorAll('#msg-recipients-body input[data-pupil-id]');
+  const allChecked = boxes.length > 0 && Array.from(boxes).every(b => b.checked);
+  const selectAll = document.getElementById('msg-select-all');
+  if (selectAll) selectAll.checked = allChecked;
+}
+
+function updateMsgRecipientCount() {
+  // Count unique phones among selected pupils (need pupil data; recompute from DOM is not enough).
+  // We track selected ids; resolve phones by fetching cached pupil list is heavy. Instead, store a map.
+  const count = msgSelected.size;
+  const el = document.getElementById('msg-recipient-count');
+  if (el) el.textContent = count + ' selected';
+}
+
+function updateMsgCounter() {
+  const text = document.getElementById('msg-text').value || '';
+  const chars = text.length;
+  const parts = chars === 0 ? 0 : Math.ceil(chars / 160);
+  document.getElementById('msg-char-count').textContent = chars;
+  document.getElementById('msg-part-count').textContent = parts;
+}
+
+async function previewMsgRecipients() {
+  if (msgSelected.size === 0) {
+    alert('Select at least one recipient first.');
+    return;
+  }
+  // Fetch full pupil list to resolve selected phones
+  try {
+    const res = await apiFetch(`${API}/pupils`);
+    const pupils = await res.json();
+    const selected = pupils.filter(p => msgSelected.has(p.id));
+    // dedup by phone
+    const seen = new Set();
+    const rows = [];
+    selected.forEach(p => {
+      const key = String(p.guardian_phone || '').replace(/\\D/g, '');
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      rows.push(p);
+    });
+
+    const tbody = document.getElementById('msg-preview-body');
+    tbody.innerHTML = rows.map(p => `
+      <tr>
+        <td>${escapeHtml(p.guardian_name)} <span class="muted">(${escapeHtml(p.full_name)})</span></td>
+        <td>${escapeHtml(p.guardian_phone)}</td>
+      </tr>
+    `).join('');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="2" class="empty-cell">No recipients with phone numbers.</td></tr>';
+    }
+    document.getElementById('msg-preview-summary').textContent = rows.length + ' unique guardian(s) will receive this SMS.';
+    document.getElementById('msg-preview-modal').style.display = 'flex';
+  } catch (err) {
+    alert('Failed to load recipients');
+  }
+}
+
+function closeMsgPreviewModal() {
+  document.getElementById('msg-preview-modal').style.display = 'none';
+}
+
+async function sendMessages() {
+  const message = document.getElementById('msg-text').value.trim();
+  if (!message) {
+    alert('Please enter a message.');
+    return;
+  }
+  if (msgSelected.size === 0) {
+    alert('Select at least one recipient.');
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`${API}/pupils`);
+    const pupils = await res.json();
+    const selected = pupils.filter(p => msgSelected.has(p.id));
+
+    const seen = new Set();
+    const recipients = [];
+    selected.forEach(p => {
+      const key = String(p.guardian_phone || '').replace(/\\D/g, '');
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      recipients.push({ phone: p.guardian_phone, name: p.guardian_name, pupil_id: p.id });
+    });
+
+    if (!recipients.length) {
+      alert('No valid recipient phone numbers among the selection.');
+      return;
+    }
+
+    const sender = document.getElementById('msg-sender').value.trim();
+    if (!confirm(`Send this SMS to ${recipients.length} recipient(s)?`)) return;
+
+    const sendRes = await apiFetch(`${API}/messages/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recipients, message, sender: sender || null })
+    });
+    const result = await sendRes.json();
+    if (!sendRes.ok) throw new Error(result.error || 'Failed to send SMS');
+
+    alert(result.message || 'SMS sent.');
+    document.getElementById('msg-text').value = '';
+    updateMsgCounter();
+    msgSelected.clear();
+    document.querySelectorAll('#msg-recipients-body input[data-pupil-id]').forEach(b => { b.checked = false; });
+    updateMsgRecipientCount();
+    updateMsgSelectAllState();
+    loadMsgHistory();
+  } catch (err) {
+    alert(err.message || 'Failed to send SMS');
+  }
+}
+
+async function loadMsgHistory() {
+  try {
+    const res = await apiFetch(`${API}/messages/history`);
+    const data = await res.json();
+    if (data.setupRequired) {
+      document.getElementById('msg-history-body').innerHTML = '<tr><td colspan="7" class="empty-cell">Messages are not set up in the database yet. Run supabase/apply-updates.sql.</td></tr>';
+      return;
+    }
+    const campaigns = data.campaigns || [];
+    const tbody = document.getElementById('msg-history-body');
+    tbody.innerHTML = '';
+    campaigns.forEach(c => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td>${escapeHtml(formatDateTime(c.created_at))}</td>
+        <td>${escapeHtml(c.sender || '—')}</td>
+        <td>${escapeHtml((c.message || '').slice(0, 60))}${(c.message || '').length > 60 ? '…' : ''}</td>
+        <td>${c.recipient_count}</td>
+        <td><span class="status-badge status-${c.status === 'Sent' ? 'Paid' : 'Partial'}">${escapeHtml(c.status)}</span></td>
+        <td>${escapeHtml(c.sent_by_name || c.sent_by_email || '—')}</td>
+        <td class="row-actions"><button class="btn btn-sm btn-primary" onclick="viewMsgDetails(${c.id})">View</button></td>
+      `;
+      tbody.appendChild(tr);
+    });
+    if (campaigns.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="7" class="empty-cell">No messages sent yet.</td></tr>';
+    }
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+async function viewMsgDetails(id) {
+  try {
+    const res = await apiFetch(`${API}/messages/${id}`);
+    const data = await res.json();
+    const c = data.campaign;
+    const recipients = data.recipients || [];
+    const body = document.getElementById('msg-details-body');
+    body.innerHTML = `
+      <p><strong>Sent:</strong> ${escapeHtml(formatDateTime(c.created_at))}</p>
+      <p><strong>Sender:</strong> ${escapeHtml(c.sender || '—')}</p>
+      <p><strong>Status:</strong> ${escapeHtml(c.status)}</p>
+      <p><strong>Sent by:</strong> ${escapeHtml(c.sent_by_name || c.sent_by_email || '—')}</p>
+      <p><strong>Message:</strong></p>
+      <div class="msg-detail-text">${escapeHtml(c.message)}</div>
+      <h4 class="subheading">Recipients (${recipients.length})</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Phone</th><th>Status</th></tr></thead>
+          <tbody>
+            ${recipients.map(r => `<tr><td>${escapeHtml(r.guardian_name || '—')}</td><td>${escapeHtml(r.phone)}</td><td>${escapeHtml(r.status)}</td></tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+    document.getElementById('msg-details-modal').style.display = 'flex';
+  } catch (err) {
+    alert('Failed to load message details');
+  }
+}
+
+function closeMsgDetailsModal() {
+  document.getElementById('msg-details-modal').style.display = 'none';
 }
 
 // --- Initialize ---

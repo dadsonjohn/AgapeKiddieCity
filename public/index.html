@@ -68,6 +68,7 @@
       <a href="#fees" class="nav-link admin-only" data-section="fees">Fees &amp; Billing</a>
       <a href="#attendance" class="nav-link" data-section="attendance">Attendance</a>
       <a href="#team" class="nav-link admin-only" data-section="team">Team</a>
+      <a href="#messages" class="nav-link admin-only" data-section="messages">Messages</a>
     </nav>
     <div class="user-box">
       <div class="user-identity">
@@ -269,6 +270,86 @@
       </table>
     </section>
 
+    <!-- Messages / SMS (admin only) -->
+    <section id="messages" class="page">
+      <div class="page-header">
+        <h2>SMS Messages</h2>
+      </div>
+      <p class="hint">Send an SMS to guardians. Filter recipients, compose your message, preview, then send. Powered by Hellio Messaging.</p>
+
+      <div class="messages-layout">
+        <div class="messages-compose">
+          <h3 class="subheading">1. Recipients</h3>
+          <div class="filters">
+            <select id="msg-section" onchange="onMsgSectionChange()">
+              <option value="">All Sections</option>
+              <option value="Crèche">Crèche</option>
+              <option value="Kindergarten">Kindergarten</option>
+              <option value="Primary">Primary</option>
+            </select>
+            <select id="msg-class" onchange="loadMsgRecipients()">
+              <option value="">All Classes</option>
+            </select>
+            <input type="text" id="msg-search" placeholder="Search by name or guardian" oninput="loadMsgRecipients()" />
+          </div>
+          <div class="recipient-toolbar">
+            <label class="checkbox-label"><input type="checkbox" id="msg-select-all" onchange="toggleMsgSelectAll(this.checked)" /> Select all</label>
+            <span class="badge badge-light" id="msg-recipient-count">0 selected</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Pupil</th>
+                  <th>Class</th>
+                  <th>Guardian</th>
+                  <th>Phone</th>
+                </tr>
+              </thead>
+              <tbody id="msg-recipients-body"></tbody>
+            </table>
+          </div>
+
+          <h3 class="subheading">2. Compose</h3>
+          <div class="form-group">
+            <label>Sender ID <span class="muted">(must be approved on your Hellio account)</span></label>
+            <input type="text" id="msg-sender" placeholder="e.g. YourApprovedSender" required />
+            <p class="field-hint">Register and approve this sender ID in your Hellio dashboard first.</p>
+          </div>
+          <div class="form-group">
+            <label>Message</label>
+            <textarea id="msg-text" rows="5" placeholder="Type your message here..." oninput="updateMsgCounter()"></textarea>
+            <p class="field-hint"><span id="msg-char-count">0</span> characters &middot; <span id="msg-part-count">0</span> SMS part(s) &middot; 160 chars per part</p>
+          </div>
+          <div class="row-actions">
+            <button class="btn btn-secondary" type="button" onclick="previewMsgRecipients()">Preview recipients</button>
+            <button class="btn btn-primary" type="button" onclick="sendMessages()">Send SMS</button>
+          </div>
+        </div>
+
+        <div class="messages-history">
+          <h3 class="subheading">Sent history</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>Sender</th>
+                  <th>Message</th>
+                  <th>Recipients</th>
+                  <th>Status</th>
+                  <th>Sent by</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="msg-history-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
     <!-- Team (admin only) -->
     <section id="team" class="page">
       <div class="page-header">
@@ -449,6 +530,36 @@
       <div class="receipt-actions">
         <button type="button" class="btn btn-primary" onclick="printReceipt()">Print Receipt</button>
         <button type="button" class="btn btn-secondary" onclick="closeReceiptModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SMS Preview Modal -->
+  <div id="msg-preview-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeMsgPreviewModal()">&times;</span>
+      <h2>Preview Recipients</h2>
+      <p class="modal-note" id="msg-preview-summary"></p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Name</th><th>Phone</th></tr></thead>
+          <tbody id="msg-preview-body"></tbody>
+        </table>
+      </div>
+      <div class="receipt-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeMsgPreviewModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- SMS Details Modal -->
+  <div id="msg-details-modal" class="modal">
+    <div class="modal-content">
+      <span class="close" onclick="closeMsgDetailsModal()">&times;</span>
+      <h2>Message Details</h2>
+      <div id="msg-details-body"></div>
+      <div class="receipt-actions">
+        <button type="button" class="btn btn-secondary" onclick="closeMsgDetailsModal()">Close</button>
       </div>
     </div>
   </div>

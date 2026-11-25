@@ -225,3 +225,34 @@ on conflict (name) do nothing;
 
 -- Ask PostgREST to refresh its schema cache immediately after creating tables.
 notify pgrst, 'reload schema';
+
+-- ---------------------------------------------------------------------------
+-- SMS messaging (Hellio)
+-- ---------------------------------------------------------------------------
+create table if not exists public.sms_campaigns (
+  id bigserial primary key,
+  message text not null,
+  sender text,
+  recipient_count integer default 0,
+  status text default 'Sent',
+  provider_response jsonb,
+  sent_by_id uuid,
+  sent_by_name text,
+  sent_by_email text,
+  created_at timestamptz default now()
+);
+
+create table if not exists public.sms_recipients (
+  id bigserial primary key,
+  campaign_id bigint references public.sms_campaigns(id) on delete cascade,
+  pupil_id bigint references public.pupils(id) on delete set null,
+  guardian_name text,
+  phone text not null,
+  status text default 'Sent',
+  provider_message_id text,
+  error text,
+  created_at timestamptz default now()
+);
+
+create index if not exists idx_sms_campaigns_created on public.sms_campaigns (created_at desc);
+create index if not exists idx_sms_recipients_campaign on public.sms_recipients (campaign_id);

@@ -7,6 +7,7 @@ const pupilRoutes = require('./routes/pupils');
 const feeRoutes = require('./routes/fees');
 const attendanceRoutes = require('./routes/attendance');
 const dashboardRoutes = require('./routes/dashboard');
+const messageRoutes = require('./routes/messages');
 
 const app = express();
 
@@ -39,6 +40,7 @@ app.use('/api/pupils', requireAuth, pupilRoutes({ supabase, requireAdmin }));
 app.use('/api/fees', requireAdmin, feeRoutes({ supabase }));
 app.use('/api/attendance', requireAuth, attendanceRoutes({ supabase }));
 app.use('/api/dashboard', requireAuth, dashboardRoutes({ supabase }));
+app.use('/api/messages', requireAdmin, messageRoutes({ supabase }));
 
 // Fallback: serve index.html for any non-API route (SPA-style)
 app.get('*', (req, res) => {
