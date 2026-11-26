@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Agape Kiddie City Academy</title>
-  <link rel="stylesheet" href="styles.css?v=5" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <!-- Authentication screen -->
@@ -329,10 +329,13 @@
       <!-- Report cards -->
       <div id="score-panel-reports" class="score-panel">
         <div class="filters">
-          <select id="report-class" onchange="loadReports()">
+          <select id="report-class" onchange="onReportClassChange()">
             <option value="">Select Class</option>
           </select>
-          <button type="button" class="btn btn-primary" onclick="generateReports()">Generate for Class</button>
+          <select id="report-pupil">
+            <option value="">All pupils with scores</option>
+          </select>
+          <button type="button" class="btn btn-primary" onclick="generateReports()">Generate</button>
           <span id="report-status" class="hint"></span>
         </div>
         <p class="hint">A report is saved permanently, like a receipt. Generating again for the same pupil and term refreshes the saved report.</p>
@@ -745,6 +748,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=5"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>

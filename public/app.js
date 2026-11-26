@@ -1771,7 +1771,7 @@ function renderScoreSheet(data) {
     head.appendChild(th);
   });
 
-  ['Total', 'Grade', 'Remark'].forEach(label => {
+  ['Total', 'Grade', 'Remark', 'Actions'].forEach(label => {
     const th = document.createElement('th');
     th.textContent = label;
     head.appendChild(th);
@@ -1780,7 +1780,7 @@ function renderScoreSheet(data) {
   body.innerHTML = '';
 
   if (!data.pupils || !data.pupils.length) {
-    body.innerHTML = `<tr><td colspan="${data.components.length + 4}" class="empty-cell">No pupils in this class yet.</td></tr>`;
+    body.innerHTML = `<tr><td colspan="${data.components.length + 5}" class="empty-cell">No pupils in this class yet.</td></tr>`;
     table.hidden = false;
     return;
   }
@@ -1826,6 +1826,22 @@ function renderScoreSheet(data) {
     const remarkCell = document.createElement('td');
     remarkCell.className = 'score-remark';
     tr.appendChild(remarkCell);
+
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'score-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-sm';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => savePupilScores(pupil.pupil_id));
+    const reportBtn = document.createElement('button');
+    reportBtn.type = 'button';
+    reportBtn.className = 'btn btn-sm btn-secondary';
+    reportBtn.textContent = 'Report';
+    reportBtn.addEventListener('click', () => generatePupilReport(pupil.pupil_id, pupil.full_name));
+    actionsCell.appendChild(saveBtn);
+    actionsCell.appendChild(reportBtn);
+    tr.appendChild(actionsCell);
 
     body.appendChild(tr);
     recalcScoreRow(tr.querySelector('input[data-component-id]'));
@@ -1901,6 +1917,86 @@ async function saveScoreSheet() {
     setScoreStatus(`Saved ${data.saved} score${data.saved === 1 ? '' : 's'}.`);
   } catch (err) {
     setScoreStatus(err.message || 'Failed to save scores', true);
+  }
+}
+
+async function savePupilScores(pupilId) {
+  if (!scoreState.sheet) {
+    setScoreStatus('Choose a class and subject first.', true);
+    return;
+  }
+  const classLevel = scoreState.sheet.class_level;
+  const subjectId = scoreState.sheet.subject.id;
+  const scores = [];
+
+  document.querySelectorAll(`#score-sheet-body input[data-component-id][data-pupil-id="${pupilId}"]`).forEach(input => {
+    if (input.value === '') return;
+    scores.push({
+      pupil_id: Number(input.dataset.pupilId),
+      component_id: Number(input.dataset.componentId),
+      score: Number(input.value)
+    });
+  });
+
+  if (!scores.length) {
+    setScoreStatus('There is nothing to save for this pupil yet.', true);
+    return;
+  }
+
+  setScoreStatus('Saving…');
+
+  try {
+    const res = await apiFetch(`${API}/scores/sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        class_level: classLevel,
+        subject_id: subjectId,
+        scores
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save scores');
+    setScoreStatus(`Saved ${data.saved} score${data.saved === 1 ? '' : 's'} for this pupil.`);
+  } catch (err) {
+    setScoreStatus(err.message || 'Failed to save scores', true);
+  }
+}
+
+async function generatePupilReport(pupilId, pupilName) {
+  ensureScorePeriod();
+  const classLevel = document.getElementById('score-class').value;
+  if (!classLevel) {
+    setReportStatus('Choose a class first.', true);
+    return;
+  }
+  if (!confirm(`Generate a report card for ${pupilName}?`)) return;
+
+  setReportStatus('Generating…');
+
+  try {
+    const res = await apiFetch(`${API}/scores/reports/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        class_level: classLevel,
+        pupil_ids: [Number(pupilId)]
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to generate report card');
+    setReportStatus(`${data.generated} report card(s) saved.${data.skipped ? ` (${data.skipped} without saved scores skipped)` : ''}`);
+    // refresh reports list if on that tab
+    if (document.getElementById('score-panel-reports').classList.contains('active')) {
+      await loadReports();
+    }
+  } catch (err) {
+    console.error('generatePupilReport error:', err);
+    setReportStatus(err && err.message ? err.message : 'Failed to generate report card', true);
   }
 }
 
@@ -2236,6 +2332,32 @@ function setReportStatus(message, isError) {
   el.classList.toggle('text-danger', Boolean(isError));
 }
 
+async function onReportClassChange() {
+  await loadReportPupils();
+  await loadReports();
+}
+
+async function loadReportPupils() {
+  const select = document.getElementById('report-pupil');
+  if (!select) return;
+  const classLevel = document.getElementById('report-class').value;
+  select.innerHTML = '<option value="">All pupils with scores</option>';
+  if (!classLevel) return;
+  try {
+    const res = await apiFetch(`${API}/pupils?class_level=${encodeURIComponent(classLevel)}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) return;
+    data.forEach(pupil => {
+      const option = document.createElement('option');
+      option.value = pupil.id;
+      option.textContent = pupil.full_name;
+      select.appendChild(option);
+    });
+  } catch (err) {
+    // ignore
+  }
+}
+
 async function loadReports() {
   ensureScorePeriod();
   const classLevel = document.getElementById('report-class').value;
@@ -2297,21 +2419,25 @@ async function generateReports() {
     setReportStatus('Choose a class first.', true);
     return;
   }
-  if (!confirm(`Generate report cards for pupils in ${classLevel} who have saved scores? Saved reports for this term will be refreshed.`)) {
+  const pupilId = document.getElementById('report-pupil').value;
+  const scope = pupilId ? 'the selected pupil' : `pupils in ${classLevel} with saved scores`;
+  if (!confirm(`Generate report cards for ${scope}? Saved reports for this term will be refreshed.`)) {
     return;
   }
 
   setReportStatus('Generating…');
 
   try {
+    const body = {
+      term: scoreState.term,
+      academic_year: scoreState.year,
+      class_level: classLevel
+    };
+    if (pupilId) body.pupil_ids = [Number(pupilId)];
     const res = await apiFetch(`${API}/scores/reports/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        term: scoreState.term,
-        academic_year: scoreState.year,
-        class_level: classLevel
-      })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to generate report cards');
