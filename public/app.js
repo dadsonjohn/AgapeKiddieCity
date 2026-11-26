@@ -1990,10 +1990,14 @@ async function generatePupilReport(pupilId, pupilName) {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to generate report card');
     setReportStatus(`${data.generated} report card(s) saved.${data.skipped ? ` (${data.skipped} without saved scores skipped)` : ''}`);
-    // refresh reports list if on that tab
-    if (document.getElementById('score-panel-reports').classList.contains('active')) {
-      await loadReports();
+    // show the result in the Report Cards tab
+    switchScoreTab('reports');
+    const cls = document.getElementById('report-class');
+    if (cls && !cls.value) {
+      cls.value = document.getElementById('score-class').value;
+      await loadReportPupils();
     }
+    await loadReports();
   } catch (err) {
     console.error('generatePupilReport error:', err);
     setReportStatus(err && err.message ? err.message : 'Failed to generate report card', true);
