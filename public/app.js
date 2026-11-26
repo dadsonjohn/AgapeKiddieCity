@@ -2130,10 +2130,6 @@ async function loadSetupSubjects() {
       `;
       list.appendChild(label);
     });
-
-    if (!classLevel) {
-      setSetupStatus('Choose a class to tick its subjects.');
-    }
   } catch (err) {
     setSetupStatus(err.message || 'Failed to load subjects', true);
   }
@@ -2320,8 +2316,8 @@ async function generateReports() {
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Failed to generate report cards');
 
-    setReportStatus(`${data.generated} report card(s) saved.`);
     await loadReports();
+    setReportStatus(`${data.generated} report card(s) saved.`);
   } catch (err) {
     setReportStatus(err.message || 'Failed to generate report cards', true);
   }

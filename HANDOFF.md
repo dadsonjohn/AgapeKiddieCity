@@ -50,6 +50,12 @@ A lightweight school ERP web app for **Agape Kiddie City Academy**.
 18. Show **present counts per class** and **daily attendance history** on the attendance page.
 19. Let **teachers add pupils**; deleting a pupil must be **approved by an admin**.
 20. Make duplicate-pupil prevention strict: the same pupil name cannot be added twice even with a different phone, guardian, or class.
+21. Add **end-of-term scores and report cards**:
+    - Configurable assessment components per term (Class Score, Projects, Attendance, Exam by default), with weights that must total 100%. Additional criteria can be added.
+    - Subjects are assigned per class, because each class studies a different set.
+    - School-wide A–F grading scale with editable minimum scores and remarks (A = 80+ by default).
+    - Attendance component is auto-calculated from attendance records (editable), using optional term dates.
+    - Printable end-of-term report per pupil, saved permanently as a snapshot like receipts.
 
 ---
 
@@ -105,9 +111,11 @@ Do not reintroduce `@supabase/server` without testing the Vercel deployment.
 | `routes/pupils.js` | Pupil CRUD, birthday, strict duplicate/phone validation, teacher delete requests |
 | `routes/fees.js` | Invoice listing, single + bulk invoices, payments, saved printable receipts |
 | `routes/attendance.js` | Roster/date reads, single + bulk upserts, per-section/per-class summary, daily analytics |
+| `routes/scores.js` | Subjects per class, assessment components, grading scale, score sheets, report-card generation/listing |
 | `routes/dashboard.js` | Dashboard totals plus per-section and per-class pupil counts |
 | `supabase/schema.sql` | Full schema for a fresh database, indexes, triggers, RLS, `service_role` grants |
-| `supabase/apply-updates.sql` | Idempotent update for an existing database (birthday, receipts, delete requests, duplicate trigger) |
+| `supabase/apply-updates.sql` | Idempotent update for an existing database (birthday, gender, Nursery, receipts, delete requests, duplicate trigger, scores/reports) |
+| `supabase/add-scores.sql` | One-paste idempotent migration for the scores/report feature (plus the pending gender/Nursery changes) |
 | `scripts/apply-schema.js` | Applies `schema.sql` over `SUPABASE_DB_URL` (`npm run setup`) |
 | `scripts/migrate-local-to-supabase.js` | One-time copy of `erp.db` into Supabase (`npm run migrate`) |
 | `public/index.html` | Single-page UI (login/sign-up, Dashboard, Pupils, Fees, Attendance, Team) |
@@ -206,6 +214,47 @@ pupil_delete_requests(
   reviewed_at timestamptz,
   created_at timestamptz
 )
+
+subjects(id bigint pk, name text, created_at timestamptz)
+class_subjects(id bigint pk, class_level text, subject_id fk → subjects(id), sort_order int)
+
+assessment_components(
+  id bigint pk,
+  term text, academic_year text,
+  name text,                          -- 'Class Score' | 'Projects' | ...
+  weight numeric(5,2),                -- weights per term must total 100
+  is_attendance boolean,              -- only one component may be true
+  sort_order int
+)
+
+grading_periods(id bigint pk, term text, academic_year text, start_date date, end_date date)
+
+grade_scales(id bigint pk, grade text unique, min_score numeric(5,2), remark text, sort_order int)
+
+scores(
+  id bigint pk,
+  pupil_id fk → pupils(id) on delete cascade,
+  subject_id fk → subjects(id) on delete cascade,
+  component_id fk → assessment_components(id) on delete cascade,
+  term text, academic_year text,
+  score numeric(5,2),
+  entered_by text, updated_at timestamptz,
+  unique (pupil_id, subject_id, component_id, term, academic_year)
+)
+
+report_cards(
+  id bigint pk,
+  report_number text unique,          -- AKC-RPT-YYYYMMDD-0001
+  pupil_id fk → pupils(id) on delete set null,
+  pupil_name text, pupil_class text, section text,   -- snapshots
+  term text, academic_year text,
+  subject_count int, total_score numeric(7,2), average_score numeric(5,2),
+  overall_grade text,
+  attendance_present int, attendance_marked int, attendance_percent numeric(5,2),
+  snapshot jsonb,                     -- frozen subject/component breakdown
+  issued_by text, generated_at timestamptz, created_at timestamptz,
+  unique (pupil_id, term, academic_year)
+)
 ```
 
 Indexes exist on pupils.section, pupils.class_level, pupils(lower(btrim(full_name))), fee_invoices.pupil_id, fee_invoices(term, academic_year), payments.invoice_id, receipts(pupil_id), receipts(paid_on), pupil_delete_requests(status, created_at), pupil_delete_requests(pupil_id), attendance.attendance_date, attendance.pupil_id. A partial unique index allows only one pending delete request per pupil.
@@ -230,6 +279,10 @@ Important data rules:
 - Deleting a pupil cascades to their invoices, payments, and attendance.
 - Guardian phone must be exactly 10 digits. The API rejects anything else and the form strips non-digits as you type.
 - A pupil is rejected as a duplicate when the name matches and either the guardian phone matches, or the same guardian name + section + class match. The database unique index is a second safety net.
+- Assessment components are stored per `term` + `academic_year`; their weights must total 100 and only one may be flagged `is_attendance`.
+- A score row is unique per `(pupil, subject, component, term, academic_year)`.
+- Grade cut-offs live in `grade_scales` and apply school-wide. The lowest grade's `min_score` should be 0 so every average gets a grade.
+- Report cards are upserted per `(pupil, term, academic_year)`. The `snapshot` jsonb freezes the subject/component breakdown so a saved report never changes when scores are edited later.
 - The first account to sign up becomes Admin; later accounts become Teacher. An admin can change roles on the Team page. The last admin cannot be demoted or deleted, and admins cannot change/delete their own account.
 - Role changes take effect on the affected user's next login (the signed cookie carries the role for up to 7 days). Removing an account blocks future logins; an existing cookie remains valid until it expires.
 
@@ -276,6 +329,25 @@ All return JSON. Errors: `{ "error": "message" }` with an appropriate status.
 | GET | `/api/attendance/summary/:date` | Per-section `total_pupils`, `total_marked`, `present`, `absent`, `late` |
 | DELETE | `/api/attendance/:id` | Delete a record |
 
+### Scores & reports endpoints
+
+| Method | Path | Access | Notes |
+|---|---|---|---|
+| GET | `/api/scores/setup` | Signed in | `?term=&academic_year=` → components, grade scale, term dates |
+| PUT | `/api/scores/setup/components` | Admin | Replace/update the term's components; weights must total 100 |
+| PUT | `/api/scores/setup/period` | Admin | Optional term `start_date` / `end_date` for attendance |
+| GET/PUT | `/api/scores/setup/grades` | Signed in / Admin | A–F scale with `min_score` and `remark` |
+| GET | `/api/scores/subjects` | Signed in | All subjects, or a class's subjects with `?class_level=` |
+| POST | `/api/scores/subjects` | Admin | Add a subject to the master list |
+| DELETE | `/api/scores/subjects/:id` | Admin | Delete a subject (cascades class links and scores) |
+| PUT | `/api/scores/subjects/class` | Admin | `{ class_level, subject_ids[] }` |
+| GET | `/api/scores/sheet` | Signed in | `?term=&academic_year=&class_level=&subject_id=` → pupils, components, saved scores, auto attendance |
+| POST | `/api/scores/sheet` | Signed in | `{ term, academic_year, class_level, subject_id, scores[] }` upsert |
+| POST | `/api/scores/reports/generate` | Signed in | `{ term, academic_year, class_level, pupil_ids? }` → saved snapshots |
+| GET | `/api/scores/reports` | Signed in | Saved reports, filtered by term/year/class |
+| GET | `/api/scores/reports/:id` | Signed in | Full report including the `snapshot` JSON |
+| DELETE | `/api/scores/reports/:id` | Admin | Delete a saved report |
+
 Role rules enforced in `app.js` and the routers:
 - `/api/fees/*` — **admin only** (403 for teachers).
 - `POST/PUT/DELETE /api/pupils/*` — **admin only**; `GET /api/pupils` is available to both roles.
@@ -293,6 +365,11 @@ Role rules enforced in `app.js` and the routers:
 - **Fees:** same eye toggle. Grouped by section block (Crèche, Kindergarten, Primary) and then by class, with per-group totals. Buttons: **General Invoice**, **Individual Invoice**, per-row **Pay** / **Delete**.
 - **Pupils:** table with section and class filters, search, add/edit modal. Class dropdown options depend on the selected section (`CLASS_LEVELS` in `constants.js`). The guardian phone field accepts digits only and enforces exactly 10; duplicate names + guardian phones (or same name/guardian/class) are rejected with a clear message.
 - **Attendance:** date picker, section/class filters, summary cards per section, full roster for the chosen date. Changing a pupil's status saves automatically (no submit button). **Mark All Present** bulk-marks the currently listed pupils. Unmarked pupils show "Not marked".
+- **Scores (teachers + admins):** term and academic-year fields, three tabs:
+  - **Enter Scores** — pick class → subject; each pupil is a row and each assessment component a column. Totals /100 and grades update live. The attendance column is prefilled from attendance records and can be adjusted. **Save Scores** upserts the class at once.
+  - **Report Cards** — generate for a whole class, list saved reports, open/print any report. Generating again for the same pupil + term refreshes the saved snapshot.
+  - **Setup (admin only)** — components and weights (must equal 100%), school-wide grading scale, subjects per class, and optional term start/end dates.
+- **Report card:** A4 printable sheet with pupil/pupil class snapshots, subject × component table, total/average/overall grade, attendance percentage, grading legend, signature lines and school-stamp space. Saved with an `AKC-RPT-YYYYMMDD-####` number, like receipts.
 - Amount masking is **client-side display only** (the data is still in the API response).
 
 ---
