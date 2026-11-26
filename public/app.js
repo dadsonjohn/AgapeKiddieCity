@@ -364,6 +364,7 @@ function loadPageData(section) {
     ensureAttendanceDate();
     loadAttendance();
   }
+  if (section === 'scores') loadScoresPage();
   if (section === 'team') loadTeam();
   if (section === 'messages') { loadMsgRecipients(); loadMsgHistory(); loadMsgConfig(); }
 }
@@ -1530,3 +1531,1054 @@ fillClassSelect(document.getElementById('filter-class'), '', '', 'All Classes');
 fillClassSelect(document.getElementById('attendance-class'), '', '', 'All Classes');
 ensureAttendanceDate();
 checkAuth();
+
+// ---------------------------------------------------------------------------
+// Scores & Reports
+// ---------------------------------------------------------------------------
+const scoreState = {
+  term: '',
+  year: '',
+  components: [],
+  gradeScale: [],
+  hasComponents: false,
+  period: null,
+  sheet: null,
+  reports: [],
+  allSubjects: []
+};
+
+function defaultAcademicYear() {
+  const now = new Date();
+  const year = now.getFullYear();
+  const start = now.getMonth() >= 8 ? year : year - 1;
+  return `${start}-${start + 1}`;
+}
+
+function ensureScorePeriod() {
+  const termInput = document.getElementById('score-term');
+  const yearInput = document.getElementById('score-year');
+  if (!termInput.value) {
+    termInput.value = localStorage.getItem('scoreTerm') || 'Term 1';
+  }
+  if (!yearInput.value) {
+    yearInput.value = localStorage.getItem('scoreYear') || defaultAcademicYear();
+  }
+  scoreState.term = termInput.value.trim();
+  scoreState.year = yearInput.value.trim();
+}
+
+function initScorePage() {
+  ['score-class', 'report-class', 'setup-subject-class'].forEach(id => {
+    const select = document.getElementById(id);
+    if (select && select.options.length <= 1) {
+      fillClassSelect(select, '', '', 'Select Class');
+    }
+  });
+  ensureScorePeriod();
+}
+
+function activeScoreTab() {
+  const tab = document.querySelector('.score-tab.active');
+  return tab ? tab.dataset.scoreTab : 'entry';
+}
+
+function switchScoreTab(tab) {
+  document.querySelectorAll('.score-tab').forEach(button => {
+    button.classList.toggle('active', button.dataset.scoreTab === tab);
+  });
+  document.querySelectorAll('.score-panel').forEach(panel => {
+    panel.classList.toggle('active', panel.id === `score-panel-${tab}`);
+  });
+
+  if (tab === 'entry') onScoreClassChange();
+  if (tab === 'reports') loadReports();
+  if (tab === 'setup') loadSetupPanel();
+}
+
+function loadScoresPage() {
+  initScorePage();
+  const tab = activeScoreTab();
+  if (tab === 'entry') onScoreClassChange();
+  if (tab === 'reports') loadReports();
+  if (tab === 'setup') loadSetupPanel();
+}
+
+function onScorePeriodChange() {
+  ensureScorePeriod();
+  localStorage.setItem('scoreTerm', scoreState.term);
+  localStorage.setItem('scoreYear', scoreState.year);
+  const tab = activeScoreTab();
+  if (tab === 'entry') onScoreClassChange();
+  if (tab === 'reports') loadReports();
+  if (tab === 'setup') loadSetupPanel();
+}
+
+function setScoreStatus(message, isError) {
+  const el = document.getElementById('score-save-status');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('text-danger', Boolean(isError));
+}
+
+function showScoreSetupRequired(message) {
+  const box = document.getElementById('score-setup-required');
+  box.hidden = false;
+  box.innerHTML = `<strong>Setup needed.</strong> ${escapeHtml(message)}`;
+  document.getElementById('score-sheet-table').hidden = true;
+}
+
+function hideScoreSetupRequired() {
+  document.getElementById('score-setup-required').hidden = true;
+}
+
+async function loadScoreSetup() {
+  ensureScorePeriod();
+  if (!scoreState.term || !scoreState.year) return null;
+
+  const params = new URLSearchParams({
+    term: scoreState.term,
+    academic_year: scoreState.year
+  });
+  const res = await apiFetch(`${API}/scores/setup?${params.toString()}`);
+  const data = await res.json();
+
+  if (!res.ok) {
+    if (data.setupRequired) {
+      showScoreSetupRequired(data.error || 'Scores are not set up in the database yet.');
+      return null;
+    }
+    throw new Error(data.error || 'Failed to load score setup');
+  }
+
+  hideScoreSetupRequired();
+  scoreState.components = data.components || [];
+  scoreState.gradeScale = data.grade_scale || [];
+  scoreState.hasComponents = Boolean(data.has_components);
+  scoreState.period = data.period || null;
+  return data;
+}
+
+async function onScoreClassChange() {
+  const classLevel = document.getElementById('score-class').value;
+  const subjectSelect = document.getElementById('score-subject');
+  subjectSelect.innerHTML = '<option value="">Select Subject</option>';
+
+  if (!classLevel) {
+    document.getElementById('score-sheet-table').hidden = true;
+    scoreState.sheet = null;
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`${API}/scores/subjects?class_level=${encodeURIComponent(classLevel)}`);
+    const data = await res.json();
+    if (data.setupRequired) {
+      showScoreSetupRequired(data.error || 'Scores are not set up in the database yet.');
+      return;
+    }
+    if (!res.ok) throw new Error(data.error || 'Failed to load subjects');
+
+    (data.subjects || []).forEach(subject => {
+      const option = document.createElement('option');
+      option.value = subject.id;
+      option.textContent = subject.name;
+      subjectSelect.appendChild(option);
+    });
+
+    if (!data.subjects || !data.subjects.length) {
+      showScoreSetupRequired('No subjects are assigned to this class yet. An administrator can add them under Scores → Setup.');
+      return;
+    }
+
+    hideScoreSetupRequired();
+
+    const preferred = localStorage.getItem(`scoreSubject-${classLevel}`);
+    if (preferred && (data.subjects || []).some(subject => String(subject.id) === preferred)) {
+      subjectSelect.value = preferred;
+    }
+    if (subjectSelect.value) await loadScoreSheet();
+  } catch (err) {
+    setScoreStatus(err.message || 'Failed to load subjects', true);
+  }
+}
+
+async function loadScoreSheet() {
+  ensureScorePeriod();
+  const classLevel = document.getElementById('score-class').value;
+  const subjectId = document.getElementById('score-subject').value;
+  const table = document.getElementById('score-sheet-table');
+  setScoreStatus('');
+
+  if (!classLevel || !subjectId) {
+    table.hidden = true;
+    scoreState.sheet = null;
+    return;
+  }
+
+  localStorage.setItem(`scoreSubject-${classLevel}`, subjectId);
+
+  try {
+    const params = new URLSearchParams({
+      term: scoreState.term,
+      academic_year: scoreState.year,
+      class_level: classLevel,
+      subject_id: subjectId
+    });
+    const res = await apiFetch(`${API}/scores/sheet?${params.toString()}`);
+    const data = await res.json();
+
+    if (!res.ok) {
+      if (data.setupRequired) {
+        showScoreSetupRequired(data.error || 'Set up the assessment components first.');
+        return;
+      }
+      throw new Error(data.error || 'Failed to load the score sheet');
+    }
+
+    hideScoreSetupRequired();
+    scoreState.sheet = data;
+    scoreState.components = data.components || [];
+    scoreState.gradeScale = data.grade_scale || [];
+    renderScoreSheet(data);
+  } catch (err) {
+    table.hidden = true;
+    setScoreStatus(err.message || 'Failed to load the score sheet', true);
+  }
+}
+
+function gradeForClient(score) {
+  const scale = [...(scoreState.gradeScale || [])]
+    .sort((a, b) => Number(b.min_score) - Number(a.min_score));
+  return scale.find(item => Number(score) >= Number(item.min_score))
+    || scale[scale.length - 1]
+    || { grade: '-', remark: '' };
+}
+
+function renderScoreSheet(data) {
+  const head = document.getElementById('score-sheet-head');
+  const body = document.getElementById('score-sheet-body');
+  const table = document.getElementById('score-sheet-table');
+
+  head.innerHTML = '';
+
+  const pupilHead = document.createElement('th');
+  pupilHead.textContent = 'Pupil';
+  head.appendChild(pupilHead);
+
+  data.components.forEach(component => {
+    const th = document.createElement('th');
+    th.innerHTML = `${escapeHtml(component.name)}<span class="weight-tag">(/${Number(component.weight)})</span>`;
+    head.appendChild(th);
+  });
+
+  ['Total', 'Grade', 'Remark', 'Actions'].forEach(label => {
+    const th = document.createElement('th');
+    th.textContent = label;
+    head.appendChild(th);
+  });
+
+  body.innerHTML = '';
+
+  if (!data.pupils || !data.pupils.length) {
+    body.innerHTML = `<tr><td colspan="${data.components.length + 5}" class="empty-cell">No pupils in this class yet.</td></tr>`;
+    table.hidden = false;
+    return;
+  }
+
+  data.pupils.forEach(pupil => {
+    const tr = document.createElement('tr');
+    const nameCell = document.createElement('td');
+    nameCell.textContent = pupil.full_name;
+    tr.appendChild(nameCell);
+
+    data.components.forEach(component => {
+      const td = document.createElement('td');
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.className = 'score-input';
+      input.min = '0';
+      input.max = String(Number(component.weight));
+      input.step = '0.5';
+      input.dataset.pupilId = pupil.pupil_id;
+      input.dataset.componentId = component.id;
+      input.dataset.weight = String(Number(component.weight));
+      input.addEventListener('input', () => recalcScoreRow(input));
+
+      const value = pupil.scores ? pupil.scores[component.id] : null;
+      if (value !== null && value !== undefined) input.value = value;
+
+      if (component.is_attendance) {
+        input.title = `Auto-calculated from attendance (${pupil.attendance.present} of ${pupil.attendance.marked} days present). You can adjust it.`;
+      }
+
+      td.appendChild(input);
+      tr.appendChild(td);
+    });
+
+    const totalCell = document.createElement('td');
+    totalCell.className = 'score-total';
+    tr.appendChild(totalCell);
+
+    const gradeCell = document.createElement('td');
+    gradeCell.className = 'score-grade';
+    tr.appendChild(gradeCell);
+
+    const remarkCell = document.createElement('td');
+    remarkCell.className = 'score-remark';
+    tr.appendChild(remarkCell);
+
+    const actionsCell = document.createElement('td');
+    actionsCell.className = 'score-actions';
+    const saveBtn = document.createElement('button');
+    saveBtn.type = 'button';
+    saveBtn.className = 'btn btn-sm';
+    saveBtn.textContent = 'Save';
+    saveBtn.addEventListener('click', () => savePupilScores(pupil.pupil_id));
+    const reportBtn = document.createElement('button');
+    reportBtn.type = 'button';
+    reportBtn.className = 'btn btn-sm btn-secondary';
+    reportBtn.textContent = 'Report';
+    reportBtn.addEventListener('click', () => generatePupilReport(pupil.pupil_id, pupil.full_name));
+    actionsCell.appendChild(saveBtn);
+    actionsCell.appendChild(reportBtn);
+    tr.appendChild(actionsCell);
+
+    body.appendChild(tr);
+    recalcScoreRow(tr.querySelector('input[data-component-id]'));
+  });
+
+  table.hidden = false;
+}
+
+function recalcScoreRow(input) {
+  if (!input) return;
+  const tr = input.closest('tr');
+  if (!tr) return;
+
+  let total = 0;
+  tr.querySelectorAll('input[data-component-id]').forEach(field => {
+    if (field.value === '') return;
+    const value = Number(field.value);
+    if (Number.isFinite(value)) total += value;
+  });
+
+  total = Math.round(total * 10) / 10;
+  const grade = gradeForClient(total);
+  const totalCell = tr.querySelector('.score-total');
+  const gradeCell = tr.querySelector('.score-grade');
+  const remarkCell = tr.querySelector('.score-remark');
+
+  if (totalCell) totalCell.textContent = total.toFixed(1);
+  if (gradeCell) gradeCell.textContent = grade.grade;
+  if (remarkCell) remarkCell.textContent = grade.remark || '';
+}
+
+async function saveScoreSheet() {
+  if (!scoreState.sheet) {
+    setScoreStatus('Choose a class and subject first.', true);
+    return;
+  }
+
+  const classLevel = scoreState.sheet.class_level;
+  const subjectId = scoreState.sheet.subject.id;
+  const scores = [];
+
+  document.querySelectorAll('#score-sheet-body input[data-component-id]').forEach(input => {
+    if (input.value === '') return;
+    scores.push({
+      pupil_id: Number(input.dataset.pupilId),
+      component_id: Number(input.dataset.componentId),
+      score: Number(input.value)
+    });
+  });
+
+  if (!scores.length) {
+    setScoreStatus('There is nothing to save yet.', true);
+    return;
+  }
+
+  setScoreStatus('Saving…');
+
+  try {
+    const res = await apiFetch(`${API}/scores/sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        class_level: classLevel,
+        subject_id: subjectId,
+        scores
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save scores');
+
+    setScoreStatus(`Saved ${data.saved} score${data.saved === 1 ? '' : 's'}.`);
+  } catch (err) {
+    setScoreStatus(err.message || 'Failed to save scores', true);
+  }
+}
+
+async function savePupilScores(pupilId) {
+  if (!scoreState.sheet) {
+    setScoreStatus('Choose a class and subject first.', true);
+    return;
+  }
+  const classLevel = scoreState.sheet.class_level;
+  const subjectId = scoreState.sheet.subject.id;
+  const scores = [];
+
+  document.querySelectorAll(`#score-sheet-body input[data-component-id][data-pupil-id="${pupilId}"]`).forEach(input => {
+    if (input.value === '') return;
+    scores.push({
+      pupil_id: Number(input.dataset.pupilId),
+      component_id: Number(input.dataset.componentId),
+      score: Number(input.value)
+    });
+  });
+
+  if (!scores.length) {
+    setScoreStatus('There is nothing to save for this pupil yet.', true);
+    return;
+  }
+
+  setScoreStatus('Saving…');
+
+  try {
+    const res = await apiFetch(`${API}/scores/sheet`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        class_level: classLevel,
+        subject_id: subjectId,
+        scores
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save scores');
+    setScoreStatus(`Saved ${data.saved} score${data.saved === 1 ? '' : 's'} for this pupil.`);
+  } catch (err) {
+    setScoreStatus(err.message || 'Failed to save scores', true);
+  }
+}
+
+async function generatePupilReport(pupilId, pupilName) {
+  ensureScorePeriod();
+  const classLevel = document.getElementById('score-class').value;
+  if (!classLevel) {
+    setReportStatus('Choose a class first.', true);
+    return;
+  }
+  if (!confirm(`Generate a report card for ${pupilName}?`)) return;
+
+  setReportStatus('Generating…');
+
+  try {
+    const res = await apiFetch(`${API}/scores/reports/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        class_level: classLevel,
+        pupil_ids: [Number(pupilId)]
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to generate report card');
+    setReportStatus(`${data.generated} report card(s) saved.${data.skipped ? ` (${data.skipped} without saved scores skipped)` : ''}`);
+    // refresh reports list if on that tab
+    if (document.getElementById('score-panel-reports').classList.contains('active')) {
+      await loadReports();
+    }
+  } catch (err) {
+    console.error('generatePupilReport error:', err);
+    setReportStatus(err && err.message ? err.message : 'Failed to generate report card', true);
+  }
+}
+
+// --- Score setup (admin) ---
+
+function setSetupStatus(message, isError) {
+  const el = document.getElementById('setup-status');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('text-danger', Boolean(isError));
+}
+
+async function loadSetupPanel() {
+  initScorePage();
+  setSetupStatus('');
+
+  try {
+    const data = await loadScoreSetup();
+    if (!data) {
+      setSetupStatus('Scores are not set up in the database yet. Run supabase/apply-updates.sql.', true);
+    } else {
+      setSetupStatus('');
+    }
+    renderComponentRows();
+    renderGradeRows();
+    loadSetupSubjects();
+
+    const start = document.getElementById('setup-term-start');
+    const end = document.getElementById('setup-term-end');
+    if (scoreState.period) {
+      start.value = scoreState.period.start_date || '';
+      end.value = scoreState.period.end_date || '';
+    } else {
+      start.value = '';
+      end.value = '';
+    }
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to load the setup panel', true);
+  }
+}
+
+function componentRow(component) {
+  const tr = document.createElement('tr');
+  if (component && component.id) tr.dataset.componentId = String(component.id);
+  tr.innerHTML = `
+    <td><input type="text" class="component-name" value="${escapeHtml(component ? component.name : '')}" placeholder="e.g. Homework" /></td>
+    <td><input type="number" class="component-weight" min="0" max="100" step="0.5" value="${component ? Number(component.weight) : ''}" oninput="updateComponentsTotal()" /></td>
+    <td class="center"><input type="checkbox" class="component-attendance" ${component && component.is_attendance ? 'checked' : ''} /></td>
+    <td><button type="button" class="btn btn-sm btn-danger" onclick="removeComponentRow(this)">Remove</button></td>
+  `;
+  return tr;
+}
+
+function renderComponentRows() {
+  const body = document.getElementById('components-body');
+  body.innerHTML = '';
+
+  const components = scoreState.components.length
+    ? scoreState.components
+    : [
+      { name: 'Class Score', weight: 30, is_attendance: false },
+      { name: 'Projects', weight: 10, is_attendance: false },
+      { name: 'Attendance', weight: 10, is_attendance: true },
+      { name: 'Exam', weight: 50, is_attendance: false }
+    ];
+
+  components.forEach(component => body.appendChild(componentRow(component)));
+  updateComponentsTotal();
+}
+
+function addComponentRow() {
+  document.getElementById('components-body').appendChild(componentRow(null));
+  updateComponentsTotal();
+}
+
+function removeComponentRow(button) {
+  const tr = button.closest('tr');
+  if (tr) tr.remove();
+  updateComponentsTotal();
+}
+
+function updateComponentsTotal() {
+  let total = 0;
+  document.querySelectorAll('#components-body .component-weight').forEach(input => {
+    const value = Number(input.value);
+    if (Number.isFinite(value)) total += value;
+  });
+  total = Math.round(total * 100) / 100;
+
+  const el = document.getElementById('components-total');
+  el.textContent = `Total: ${total}%`;
+  el.classList.toggle('weight-ok', Math.abs(total - 100) < 0.01);
+  el.classList.toggle('weight-bad', Math.abs(total - 100) >= 0.01);
+}
+
+async function saveComponents() {
+  const components = [...document.querySelectorAll('#components-body tr')].map(tr => ({
+    id: tr.dataset.componentId ? Number(tr.dataset.componentId) : null,
+    name: tr.querySelector('.component-name').value.trim(),
+    weight: Number(tr.querySelector('.component-weight').value),
+    is_attendance: tr.querySelector('.component-attendance').checked
+  })).filter(component => component.name || Number.isFinite(component.weight));
+
+  try {
+    const res = await apiFetch(`${API}/scores/setup/components`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        components
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save components');
+
+    scoreState.components = data.components || [];
+    scoreState.hasComponents = scoreState.components.length > 0;
+    renderComponentRows();
+    setSetupStatus('Assessment components saved.');
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to save components', true);
+  }
+}
+
+function gradeRow(grade) {
+  const tr = document.createElement('tr');
+  tr.innerHTML = `
+    <td><input type="text" class="grade-label" maxlength="4" value="${escapeHtml(grade ? grade.grade : '')}" /></td>
+    <td><input type="number" class="grade-min" min="0" max="100" step="1" value="${grade ? Number(grade.min_score) : ''}" /></td>
+    <td><input type="text" class="grade-remark" value="${escapeHtml(grade ? grade.remark || '' : '')}" /></td>
+    <td><button type="button" class="btn btn-sm btn-danger" onclick="removeGradeRow(this)">Remove</button></td>
+  `;
+  return tr;
+}
+
+function renderGradeRows() {
+  const body = document.getElementById('grades-body');
+  body.innerHTML = '';
+
+  const scale = scoreState.gradeScale.length
+    ? scoreState.gradeScale
+    : [
+      { grade: 'A', min_score: 80, remark: 'Excellent' },
+      { grade: 'B', min_score: 70, remark: 'Very Good' },
+      { grade: 'C', min_score: 60, remark: 'Good' },
+      { grade: 'D', min_score: 50, remark: 'Credit' },
+      { grade: 'E', min_score: 40, remark: 'Pass' },
+      { grade: 'F', min_score: 0, remark: 'Fail' }
+    ];
+
+  scale.forEach(grade => body.appendChild(gradeRow(grade)));
+}
+
+function addGradeRow() {
+  document.getElementById('grades-body').appendChild(gradeRow(null));
+}
+
+function removeGradeRow(button) {
+  const tr = button.closest('tr');
+  if (tr) tr.remove();
+}
+
+async function saveGrades() {
+  const grades = [...document.querySelectorAll('#grades-body tr')].map(tr => ({
+    grade: tr.querySelector('.grade-label').value.trim(),
+    min_score: Number(tr.querySelector('.grade-min').value),
+    remark: tr.querySelector('.grade-remark').value.trim()
+  })).filter(grade => grade.grade);
+
+  try {
+    const res = await apiFetch(`${API}/scores/setup/grades`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ grades })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save the grading scale');
+
+    scoreState.gradeScale = data.grade_scale || [];
+    setSetupStatus('Grading scale saved.');
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to save the grading scale', true);
+  }
+}
+
+async function loadSetupSubjects() {
+  const classLevel = document.getElementById('setup-subject-class').value;
+  const list = document.getElementById('setup-subject-list');
+
+  try {
+    const [allRes, assignedRes] = await Promise.all([
+      apiFetch(`${API}/scores/subjects`),
+      classLevel
+        ? apiFetch(`${API}/scores/subjects?class_level=${encodeURIComponent(classLevel)}`)
+        : Promise.resolve(null)
+    ]);
+
+    if (!allRes.ok) {
+      const data = await allRes.json();
+      throw new Error(data.error || 'Failed to load subjects');
+    }
+
+    const allData = await allRes.json();
+    scoreState.allSubjects = allData.subjects || [];
+
+    const assigned = new Set();
+    if (assignedRes && assignedRes.ok) {
+      const assignedData = await assignedRes.json();
+      (assignedData.subjects || []).forEach(subject => assigned.add(Number(subject.id)));
+    }
+
+    list.innerHTML = '';
+
+    if (!scoreState.allSubjects.length) {
+      list.innerHTML = '<p class="hint">No subjects yet. Add one below.</p>';
+      return;
+    }
+
+    scoreState.allSubjects.forEach(subject => {
+      const label = document.createElement('label');
+      label.className = 'checkbox-label subject-choice';
+      label.innerHTML = `
+        <input type="checkbox" value="${subject.id}" ${assigned.has(Number(subject.id)) ? 'checked' : ''} ${classLevel ? '' : 'disabled'} />
+        <span>${escapeHtml(subject.name)}</span>
+        <button type="button" class="btn btn-sm btn-danger subject-delete" onclick="deleteSubject(${subject.id})" title="Delete this subject everywhere">&times;</button>
+      `;
+      list.appendChild(label);
+    });
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to load subjects', true);
+  }
+}
+
+async function addNewSubject() {
+  const input = document.getElementById('new-subject-name');
+  const name = input.value.trim();
+  if (!name) {
+    setSetupStatus('Enter a subject name first.', true);
+    return;
+  }
+
+  try {
+    const res = await apiFetch(`${API}/scores/subjects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to add the subject');
+
+    input.value = '';
+    setSetupStatus(`"${name}" added. Tick it for the class, then save.`);
+    await loadSetupSubjects();
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to add the subject', true);
+  }
+}
+
+async function deleteSubject(subjectId) {
+  const subject = scoreState.allSubjects.find(item => Number(item.id) === Number(subjectId));
+  const name = subject ? subject.name : 'this subject';
+  if (!confirm(`Delete "${name}" everywhere? This also removes its saved scores.`)) return;
+
+  try {
+    const res = await apiFetch(`${API}/scores/subjects/${subjectId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to remove the subject');
+
+    setSetupStatus(`"${name}" removed.`);
+    await loadSetupSubjects();
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to remove the subject', true);
+  }
+}
+
+async function saveClassSubjects() {
+  const classLevel = document.getElementById('setup-subject-class').value;
+  if (!classLevel) {
+    setSetupStatus('Choose a class first.', true);
+    return;
+  }
+
+  const subjectIds = [...document.querySelectorAll('#setup-subject-list input[type="checkbox"]:checked')]
+    .map(input => Number(input.value));
+
+  try {
+    const res = await apiFetch(`${API}/scores/subjects/class`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ class_level: classLevel, subject_ids: subjectIds })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save the class subjects');
+
+    setSetupStatus(`${classLevel}: ${(data.subjects || []).length} subject(s) saved.`);
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to save the class subjects', true);
+  }
+}
+
+async function saveTermPeriod() {
+  const startDate = document.getElementById('setup-term-start').value;
+  const endDate = document.getElementById('setup-term-end').value;
+
+  try {
+    const res = await apiFetch(`${API}/scores/setup/period`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        term: scoreState.term,
+        academic_year: scoreState.year,
+        start_date: startDate,
+        end_date: endDate
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to save the term dates');
+
+    scoreState.period = data.period || null;
+    setSetupStatus('Term dates saved.');
+  } catch (err) {
+    setSetupStatus(err.message || 'Failed to save the term dates', true);
+  }
+}
+
+// --- Report cards ---
+
+function setReportStatus(message, isError) {
+  const el = document.getElementById('report-status');
+  if (!el) return;
+  el.textContent = message || '';
+  el.classList.toggle('text-danger', Boolean(isError));
+}
+
+async function onReportClassChange() {
+  await loadReportPupils();
+  await loadReports();
+}
+
+async function loadReportPupils() {
+  const select = document.getElementById('report-pupil');
+  if (!select) return;
+  const classLevel = document.getElementById('report-class').value;
+  select.innerHTML = '<option value="">All pupils with scores</option>';
+  if (!classLevel) return;
+  try {
+    const res = await apiFetch(`${API}/pupils?class_level=${encodeURIComponent(classLevel)}`);
+    const data = await res.json();
+    if (!Array.isArray(data)) return;
+    data.forEach(pupil => {
+      const option = document.createElement('option');
+      option.value = pupil.id;
+      option.textContent = pupil.full_name;
+      select.appendChild(option);
+    });
+  } catch (err) {
+    // ignore
+  }
+}
+
+async function loadReports() {
+  ensureScorePeriod();
+  const classLevel = document.getElementById('report-class').value;
+  setReportStatus('');
+
+  if (!scoreState.term || !scoreState.year) return;
+
+  try {
+    const params = new URLSearchParams({
+      term: scoreState.term,
+      academic_year: scoreState.year
+    });
+    if (classLevel) params.set('class_level', classLevel);
+
+    const res = await apiFetch(`${API}/scores/reports?${params.toString()}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load report cards');
+
+    scoreState.reports = data.reports || [];
+    renderReports();
+  } catch (err) {
+    setReportStatus(err.message || 'Failed to load report cards', true);
+  }
+}
+
+function renderReports() {
+  const tbody = document.getElementById('reports-table-body');
+  const isAdmin = currentUser && currentUser.role === 'admin';
+  tbody.innerHTML = '';
+
+  if (!scoreState.reports.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">No report cards saved for this term yet.</td></tr>';
+    return;
+  }
+
+  scoreState.reports.forEach(report => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${escapeHtml(report.report_number || '—')}</td>
+      <td>${escapeHtml(report.pupil_name || '—')}</td>
+      <td>${escapeHtml(report.pupil_class || '—')}</td>
+      <td>${escapeHtml([report.term, report.academic_year].filter(Boolean).join(' / '))}</td>
+      <td>${Number(report.average_score || 0).toFixed(1)}</td>
+      <td><span class="grade-badge">${escapeHtml(report.overall_grade || '—')}</span></td>
+      <td>${Number(report.subject_count || 0)}</td>
+      <td class="row-actions">
+        <button type="button" class="btn btn-sm btn-primary" onclick="openReportById(${report.id})">Report</button>
+        ${isAdmin ? `<button type="button" class="btn btn-sm btn-danger" onclick="deleteReport(${report.id})">Delete</button>` : ''}
+      </td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+async function generateReports() {
+  ensureScorePeriod();
+  const classLevel = document.getElementById('report-class').value;
+  if (!classLevel) {
+    setReportStatus('Choose a class first.', true);
+    return;
+  }
+  const pupilId = document.getElementById('report-pupil').value;
+  const scope = pupilId ? 'the selected pupil' : `pupils in ${classLevel} with saved scores`;
+  if (!confirm(`Generate report cards for ${scope}? Saved reports for this term will be refreshed.`)) {
+    return;
+  }
+
+  setReportStatus('Generating…');
+
+  try {
+    const body = {
+      term: scoreState.term,
+      academic_year: scoreState.year,
+      class_level: classLevel
+    };
+    if (pupilId) body.pupil_ids = [Number(pupilId)];
+    const res = await apiFetch(`${API}/scores/reports/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to generate report cards');
+
+    await loadReports();
+    const skipped = data.skipped ? ` (${data.skipped} without saved scores skipped)` : '';
+    setReportStatus(`${data.generated} report card(s) saved.${skipped}`);
+  } catch (err) {
+    setReportStatus(err.message || 'Failed to generate report cards', true);
+  }
+}
+
+async function openReportById(reportId) {
+  try {
+    const res = await apiFetch(`${API}/scores/reports/${reportId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to load the report card');
+    openReportModal(data.report);
+  } catch (err) {
+    alert(err.message || 'Failed to load the report card');
+  }
+}
+
+function openReportModal(report) {
+  if (!report) return;
+  const snapshot = report.snapshot || {};
+  const pupil = snapshot.pupil || {};
+  const subjects = snapshot.subjects || [];
+  const components = snapshot.components || [];
+  const totals = snapshot.totals || {};
+  const attendance = snapshot.attendance || {};
+  const scale = snapshot.grading_scale || scoreState.gradeScale || [];
+  const area = document.getElementById('report-print-area');
+
+  if (!subjects.length) {
+    area.innerHTML = '<p class="hint">This report has no subject rows. Regenerate it after entering scores.</p>';
+    document.getElementById('report-modal').style.display = 'flex';
+    return;
+  }
+
+  const headCells = components.map(component => `<th>${escapeHtml(component.name)}<span class="weight-tag">(/${Number(component.weight)})</span></th>`).join('');
+  const subjectRows = subjects.map(subject => {
+    const componentCells = components.map((component, index) => {
+      const found = (subject.components || [])[index];
+      const score = found ? Number(found.score) : 0;
+      return `<td class="center">${score.toFixed(1)}</td>`;
+    }).join('');
+
+    return `
+      <tr>
+        <td class="subject-name">${escapeHtml(subject.subject_name)}</td>
+        ${componentCells}
+        <td class="center"><strong>${Number(subject.total).toFixed(1)}</strong></td>
+        <td class="center"><span class="grade-badge">${escapeHtml(subject.grade)}</span></td>
+        <td>${escapeHtml(subject.remark || '')}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const scaleText = scale
+    .map(item => `${escapeHtml(item.grade)} ${Number(item.min_score)}+`)
+    .join(' · ');
+
+  const termYear = [report.term, report.academic_year].filter(Boolean).join(' / ');
+  const generated = report.generated_at ? new Date(report.generated_at).toLocaleDateString() : '';
+
+  area.innerHTML = `
+    <div class="receipt-header">
+      <div class="receipt-logo">AK</div>
+      <div>
+        <h2>Agape Kiddie City Academy</h2>
+        <p>End of Term Report</p>
+      </div>
+    </div>
+
+    <div class="receipt-meta">
+      <div><span>Report No.</span><strong>${escapeHtml(report.report_number || 'Pending')}</strong></div>
+      <div><span>Term</span><strong>${escapeHtml(termYear || '—')}</strong></div>
+      <div><span>Class</span><strong>${escapeHtml(pupil.class_level || report.pupil_class || '—')}</strong></div>
+      <div><span>Date</span><strong>${escapeHtml(generated || '—')}</strong></div>
+    </div>
+
+    <table class="receipt-table report-summary">
+      <tr>
+        <th>Pupil</th><td>${escapeHtml(pupil.name || report.pupil_name || '—')}</td>
+        <th>Section</th><td>${escapeHtml(pupil.section || report.section || '—')}</td>
+      </tr>
+    </table>
+
+    <table class="report-subjects">
+      <thead>
+        <tr>
+          <th>Subject</th>
+          ${headCells}
+          <th>Total</th>
+          <th>Grade</th>
+          <th>Remark</th>
+        </tr>
+      </thead>
+      <tbody>${subjectRows}</tbody>
+    </table>
+
+    <div class="report-totals">
+      <div><span>Total Score</span><strong>${Number(totals.total || report.total_score || 0).toFixed(1)}</strong></div>
+      <div><span>Average</span><strong>${Number(totals.average || report.average_score || 0).toFixed(1)}</strong></div>
+      <div><span>Overall Grade</span><strong>${escapeHtml(totals.grade || report.overall_grade || '—')}</strong></div>
+      <div><span>Attendance</span><strong>${Number(attendance.percent || report.attendance_percent || 0).toFixed(1)}%</strong></div>
+    </div>
+
+    <p class="report-scale">Grading scale: ${scaleText || '—'}</p>
+
+    <div class="report-footer">
+      <div class="report-signature"><span>Class Teacher</span></div>
+      <div class="report-signature"><span>Head Teacher</span></div>
+      <div class="receipt-stamp"><span>School Stamp</span></div>
+    </div>
+    <p class="receipt-note">This report is valid only with the school stamp.</p>
+  `;
+
+  document.getElementById('report-modal').style.display = 'flex';
+}
+
+function closeReportModal() {
+  document.getElementById('report-modal').style.display = 'none';
+}
+
+function printReport() {
+  window.print();
+}
+
+async function deleteReport(reportId) {
+  if (!confirm('Delete this saved report card?')) return;
+
+  try {
+    const res = await apiFetch(`${API}/scores/reports/${reportId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Failed to delete the report card');
+    await loadReports();
+  } catch (err) {
+    alert(err.message || 'Failed to delete the report card');
+  }
+}
+
+initScorePage();

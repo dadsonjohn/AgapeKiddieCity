@@ -1018,6 +1018,11 @@ table tr:hover {
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 10mm;
+  }
+
   body {
     background: #fff;
   }
@@ -1025,11 +1030,12 @@ table tr:hover {
   #app-header,
   #app-main,
   #auth-screen,
-  .modal:not(#receipt-modal) {
+  .modal:not(#receipt-modal):not(#report-modal) {
     display: none !important;
   }
 
-  #receipt-modal {
+  #receipt-modal,
+  #report-modal {
     display: block !important;
     position: static;
     background: #fff;
@@ -1037,7 +1043,8 @@ table tr:hover {
     overflow: visible;
   }
 
-  #receipt-modal .modal-content {
+  #receipt-modal .modal-content,
+  #report-modal .modal-content {
     max-width: none;
     width: 100%;
     max-height: none;
@@ -1047,11 +1054,14 @@ table tr:hover {
   }
 
   #receipt-modal .close,
-  #receipt-modal .receipt-actions {
+  #receipt-modal .receipt-actions,
+  #report-modal .close,
+  #report-modal .receipt-actions {
     display: none !important;
   }
 
-  .receipt {
+  .receipt,
+  .report-card {
     border: none;
     padding: 0;
   }
@@ -1089,4 +1099,323 @@ table tr:hover {
   border-radius: 6px;
   border: 1px solid #e2e6ea;
   margin: 0.5rem 0 1rem;
+}
+
+/* --- Scores & Reports --- */
+.score-period-bar {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.score-period-bar .form-group {
+  margin-bottom: 0;
+  min-width: 180px;
+}
+
+.score-tabs {
+  display: flex;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #e0e6eb;
+}
+
+.score-tab {
+  border: none;
+  background: transparent;
+  padding: 0.55rem 0.9rem;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: #6c757d;
+  border-bottom: 3px solid transparent;
+  cursor: pointer;
+}
+
+.score-tab:hover {
+  color: #2c3e50;
+}
+
+.score-tab.active {
+  color: #2980b9;
+  border-bottom-color: #2980b9;
+}
+
+.score-panel {
+  display: none;
+}
+
+.score-panel.active {
+  display: block;
+}
+
+.score-sheet th,
+.score-sheet td {
+  text-align: center;
+}
+
+.score-sheet th:first-child,
+.score-sheet td:first-child {
+  text-align: left;
+}
+
+.score-input {
+  width: 76px;
+  padding: 0.4rem;
+  text-align: center;
+}
+
+.weight-tag {
+  display: block;
+  font-size: 0.68rem;
+  font-weight: 400;
+  color: #8a969f;
+}
+
+.score-total,
+.score-grade {
+  font-weight: 700;
+}
+
+.score-remark {
+  font-size: 0.8rem;
+  color: #6c757d;
+}
+
+.grade-badge {
+  display: inline-block;
+  min-width: 24px;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  background: #eaf4fb;
+  color: #1f6f9e;
+  font-weight: 700;
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.setup-callout {
+  background: #fff3cd;
+  color: #856404;
+  border: 1px solid #ffe08a;
+  border-radius: 6px;
+  padding: 0.75rem 1rem;
+  margin: 0.75rem 0;
+}
+
+.text-danger {
+  color: #c0392b !important;
+}
+
+.center {
+  text-align: center;
+}
+
+.setup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.25rem;
+}
+
+@media (max-width: 900px) {
+  .setup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.setup-card {
+  background: #fff;
+  border: 1px solid #e6ebef;
+  border-radius: 8px;
+  padding: 1rem 1.1rem;
+  min-width: 0;
+}
+
+.setup-card h3 {
+  font-size: 1.05rem;
+  color: #2c3e50;
+  margin-bottom: 0.35rem;
+}
+
+.setup-card table {
+  box-shadow: none;
+}
+
+.setup-card th,
+.setup-card td {
+  padding: 0.4rem 0.5rem;
+}
+
+.setup-card input[type="text"],
+.setup-card input[type="number"] {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+}
+
+.setup-card .row-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+.weight-total {
+  font-weight: 600;
+  font-size: 0.85rem;
+  margin-left: auto;
+}
+
+.weight-ok {
+  color: #1e8449;
+}
+
+.weight-bad {
+  color: #c0392b;
+}
+
+.subject-checklist {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.35rem 0.75rem;
+  max-height: 240px;
+  overflow: auto;
+  border: 1px solid #e6ebef;
+  border-radius: 6px;
+  padding: 0.6rem;
+  margin: 0.5rem 0;
+}
+
+.subject-choice {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.subject-delete {
+  margin-left: auto;
+  padding: 0 0.35rem;
+  line-height: 1;
+}
+
+/* --- Printable report card --- */
+.report-modal-content {
+  max-width: 920px;
+}
+
+.report-card {
+  background: #fff;
+  color: #222;
+  padding: 1.5rem;
+  border: 1px solid #d9e1e8;
+  border-radius: 8px;
+  font-size: 0.85rem;
+}
+
+.report-subjects {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 0.9rem;
+}
+
+.report-subjects th,
+.report-subjects td {
+  border: 1px solid #cfd8e0;
+  padding: 0.4rem 0.45rem;
+  font-size: 0.78rem;
+}
+
+.report-subjects th {
+  background: #f2f5f8;
+  color: #2c3e50;
+  text-align: center;
+}
+
+.report-subjects th:first-child {
+  text-align: left;
+}
+
+.report-subjects .subject-name {
+  font-weight: 600;
+}
+
+.report-subjects .center {
+  text-align: center;
+}
+
+.report-subjects .weight-tag {
+  font-size: 0.64rem;
+}
+
+.report-summary {
+  margin-top: 0.75rem;
+}
+
+.report-summary th {
+  width: 18%;
+}
+
+.report-summary td {
+  width: 32%;
+}
+
+.report-totals {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.report-totals div {
+  border: 1px solid #cfd8e0;
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+}
+
+.report-totals span {
+  display: block;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #7f8c8d;
+}
+
+.report-totals strong {
+  font-size: 1rem;
+  color: #2c3e50;
+}
+
+.report-scale {
+  margin-top: 0.75rem;
+  font-size: 0.75rem;
+  color: #6c757d;
+}
+
+.report-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 1rem;
+  margin-top: 1.6rem;
+}
+
+.report-signature {
+  flex: 1;
+  border-top: 1px solid #7f8c8d;
+  padding-top: 0.4rem;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #6c757d;
+}
+
+@media (max-width: 700px) {
+  .report-totals {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .subject-checklist {
+    grid-template-columns: 1fr;
+  }
 }

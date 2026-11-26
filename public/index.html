@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Agape Kiddie City Academy</title>
-  <link rel="stylesheet" href="styles.css?v=3" />
+  <link rel="stylesheet" href="styles.css?v=6" />
 </head>
 <body>
   <!-- Authentication screen -->
@@ -67,6 +67,7 @@
       <a href="#pupils" class="nav-link" data-section="pupils">Pupils</a>
       <a href="#fees" class="nav-link admin-only" data-section="fees">Fees &amp; Billing</a>
       <a href="#attendance" class="nav-link" data-section="attendance">Attendance</a>
+      <a href="#scores" class="nav-link" data-section="scores">Scores</a>
       <a href="#team" class="nav-link admin-only" data-section="team">Team</a>
       <a href="#messages" class="nav-link admin-only" data-section="messages">Messages</a>
     </nav>
@@ -276,6 +277,156 @@
         </thead>
         <tbody id="attendance-table-body"></tbody>
       </table>
+    </section>
+
+    <!-- Scores & Reports -->
+    <section id="scores" class="page">
+      <div class="page-header">
+        <h2>Scores &amp; Reports</h2>
+      </div>
+
+      <div class="score-period-bar">
+        <div class="form-group inline">
+          <label for="score-term">Term</label>
+          <input type="text" id="score-term" placeholder="e.g. Term 1" onchange="onScorePeriodChange()" />
+        </div>
+        <div class="form-group inline">
+          <label for="score-year">Academic Year</label>
+          <input type="text" id="score-year" placeholder="e.g. 2025-2026" onchange="onScorePeriodChange()" />
+        </div>
+      </div>
+
+      <div class="score-tabs">
+        <button type="button" class="score-tab active" data-score-tab="entry" onclick="switchScoreTab('entry')">Enter Scores</button>
+        <button type="button" class="score-tab" data-score-tab="reports" onclick="switchScoreTab('reports')">Report Cards</button>
+        <button type="button" class="score-tab admin-only" data-score-tab="setup" onclick="switchScoreTab('setup')">Setup</button>
+      </div>
+
+      <!-- Score entry -->
+      <div id="score-panel-entry" class="score-panel active">
+        <div class="filters">
+          <select id="score-class" onchange="onScoreClassChange()">
+            <option value="">Select Class</option>
+          </select>
+          <select id="score-subject" onchange="loadScoreSheet()">
+            <option value="">Select Subject</option>
+          </select>
+          <button type="button" class="btn btn-primary" onclick="saveScoreSheet()">Save Scores</button>
+          <span id="score-save-status" class="hint"></span>
+        </div>
+        <div id="score-setup-required" class="setup-callout" hidden></div>
+        <p class="hint">Enter each pupil's score for every component. The total is out of 100, and the grade updates as you type.</p>
+        <div class="table-wrap">
+          <table id="score-sheet-table" class="score-sheet" hidden>
+            <thead>
+              <tr id="score-sheet-head"></tr>
+            </thead>
+            <tbody id="score-sheet-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Report cards -->
+      <div id="score-panel-reports" class="score-panel">
+        <div class="filters">
+          <select id="report-class" onchange="onReportClassChange()">
+            <option value="">Select Class</option>
+          </select>
+          <select id="report-pupil">
+            <option value="">All pupils with scores</option>
+          </select>
+          <button type="button" class="btn btn-primary" onclick="generateReports()">Generate</button>
+          <span id="report-status" class="hint"></span>
+        </div>
+        <p class="hint">A report is saved permanently, like a receipt. Generating again for the same pupil and term refreshes the saved report.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Report #</th>
+                <th>Pupil</th>
+                <th>Class</th>
+                <th>Term</th>
+                <th>Average</th>
+                <th>Grade</th>
+                <th>Subjects</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="reports-table-body"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Setup (admin only) -->
+      <div id="score-panel-setup" class="score-panel admin-only">
+        <p id="setup-status" class="hint"></p>
+        <div class="setup-grid">
+          <section class="setup-card">
+            <h3>Assessment Components</h3>
+            <p class="hint">The weights must add up to 100%. Mark one component as Attendance to fill it automatically from attendance records.</p>
+            <table>
+              <thead>
+                <tr><th>Component</th><th>Weight %</th><th>Attendance</th><th></th></tr>
+              </thead>
+              <tbody id="components-body"></tbody>
+            </table>
+            <div class="row-actions">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addComponentRow()">Add Component</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="saveComponents()">Save Components</button>
+              <span id="components-total" class="weight-total"></span>
+            </div>
+          </section>
+
+          <section class="setup-card">
+            <h3>Grading Scale</h3>
+            <p class="hint">The minimum score is the lowest mark that earns the grade. These apply to every class and pupil.</p>
+            <table>
+              <thead>
+                <tr><th>Grade</th><th>Min Score</th><th>Remark</th><th></th></tr>
+              </thead>
+              <tbody id="grades-body"></tbody>
+            </table>
+            <div class="row-actions">
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addGradeRow()">Add Grade</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="saveGrades()">Save Grading Scale</button>
+            </div>
+          </section>
+
+          <section class="setup-card">
+            <h3>Class Subjects</h3>
+            <p class="hint">Tick the subjects each class studies. New subjects are added to the school list first.</p>
+            <div class="form-group">
+              <label>Class</label>
+              <select id="setup-subject-class" onchange="loadSetupSubjects()">
+                <option value="">Select Class</option>
+              </select>
+            </div>
+            <div id="setup-subject-list" class="subject-checklist"></div>
+            <div class="row-actions">
+              <input type="text" id="new-subject-name" placeholder="New subject name" />
+              <button type="button" class="btn btn-secondary btn-sm" onclick="addNewSubject()">Add Subject</button>
+              <button type="button" class="btn btn-primary btn-sm" onclick="saveClassSubjects()">Save Class Subjects</button>
+            </div>
+          </section>
+
+          <section class="setup-card">
+            <h3>Term Dates <span class="muted">(optional)</span></h3>
+            <p class="hint">Attendance records between these dates are used for the attendance component. Leave blank to use all attendance records.</p>
+            <div class="form-row">
+              <div class="form-group">
+                <label>Start Date</label>
+                <input type="date" id="setup-term-start" />
+              </div>
+              <div class="form-group">
+                <label>End Date</label>
+                <input type="date" id="setup-term-end" />
+              </div>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm" onclick="saveTermPeriod()">Save Term Dates</button>
+          </section>
+        </div>
+      </div>
     </section>
 
     <!-- Messages / SMS (admin only) -->
@@ -555,6 +706,18 @@
     </div>
   </div>
 
+  <!-- Printable Report Card Modal -->
+  <div id="report-modal" class="modal">
+    <div class="modal-content report-modal-content">
+      <span class="close" onclick="closeReportModal()">&times;</span>
+      <div id="report-print-area" class="report-card"></div>
+      <div class="receipt-actions">
+        <button type="button" class="btn btn-primary" onclick="printReport()">Print Report</button>
+        <button type="button" class="btn btn-secondary" onclick="closeReportModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
   <!-- SMS Preview Modal -->
   <div id="msg-preview-modal" class="modal">
     <div class="modal-content">
@@ -585,6 +748,6 @@
     </div>
   </div>
 
-  <script src="app.js?v=3"></script>
+  <script src="app.js?v=6"></script>
 </body>
 </html>
