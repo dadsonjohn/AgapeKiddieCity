@@ -2297,7 +2297,7 @@ async function generateReports() {
     setReportStatus('Choose a class first.', true);
     return;
   }
-  if (!confirm(`Generate report cards for every pupil in ${classLevel}? Saved reports for this term will be refreshed.`)) {
+  if (!confirm(`Generate report cards for pupils in ${classLevel} who have saved scores? Saved reports for this term will be refreshed.`)) {
     return;
   }
 
@@ -2317,7 +2317,8 @@ async function generateReports() {
     if (!res.ok) throw new Error(data.error || 'Failed to generate report cards');
 
     await loadReports();
-    setReportStatus(`${data.generated} report card(s) saved.`);
+    const skipped = data.skipped ? ` (${data.skipped} without saved scores skipped)` : '';
+    setReportStatus(`${data.generated} report card(s) saved.${skipped}`);
   } catch (err) {
     setReportStatus(err.message || 'Failed to generate report cards', true);
   }

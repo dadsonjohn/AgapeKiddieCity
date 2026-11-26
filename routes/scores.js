@@ -766,12 +766,11 @@ module.exports = ({ supabase, requireAdmin }) => {
       const { data: pupilData, error: pupilError } = await pupilQuery;
       if (pupilError) throw pupilError;
 
-      const pupils = pupilData || [];
-      if (!pupils.length) {
+      const allPupils = pupilData || [];
+      if (!allPupils.length) {
         return res.status(404).json({ error: 'No pupils were found in that class.' });
       }
 
-      const pupilIds = pupils.map(pupil => pupil.id);
       const subjectIds = subjects.map(subject => subject.id);
 
       const { data: scoreData, error: scoreError } = await supabase
@@ -779,7 +778,7 @@ module.exports = ({ supabase, requireAdmin }) => {
         .select('*')
         .eq('term', term)
         .eq('academic_year', academicYear)
-        .in('pupil_id', pupilIds)
+        .in('pupil_id', allPupils.map(pupil => pupil.id))
         .in('subject_id', subjectIds);
 
       if (scoreError) {
@@ -787,6 +786,16 @@ module.exports = ({ supabase, requireAdmin }) => {
         throw scoreError;
       }
 
+      // Only pupils who actually have saved scores get a report card.
+      const scoredPupilIds = new Set((scoreData || []).map(row => Number(row.pupil_id)));
+      const pupils = allPupils.filter(pupil => scoredPupilIds.has(Number(pupil.id)));
+      if (!pupils.length) {
+        return res.status(409).json({
+          error: 'No pupils in this class have saved scores for this term yet. Enter scores first, then generate report cards.'
+        });
+      }
+
+      const pupilIds = pupils.map(pupil => pupil.id);
       const { scale } = await getGradeScale();
       const period = await getPeriod(term, academicYear);
       const attendance = await getAttendanceStats(pupilIds, period);
@@ -892,7 +901,7 @@ module.exports = ({ supabase, requireAdmin }) => {
         throw error;
       }
 
-      res.json({ generated: rows.length, reports: data || [] });
+      res.json({ generated: rows.length, skipped: allPupils.length - pupils.length, reports: data || [] });
     } catch (err) {
       fail(res, err, 'Failed to generate report cards');
     }
