@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Agape Kiddie City Academy</title>
-  <link rel="stylesheet" href="styles.css?v=6" />
+  <link rel="stylesheet" href="styles.css?v=8" />
 </head>
 <body>
   <!-- Authentication screen -->
@@ -62,7 +62,8 @@
 
   <header id="app-header" hidden>
     <h1>Agape Kiddie City Academy</h1>
-    <nav>
+    <button type="button" class="nav-toggle" id="nav-toggle" aria-label="Toggle menu" aria-expanded="false" onclick="toggleNav()">☰</button>
+    <nav id="app-nav">
       <a href="#dashboard" class="nav-link active" data-section="dashboard">Dashboard</a>
       <a href="#pupils" class="nav-link" data-section="pupils">Pupils</a>
       <a href="#fees" class="nav-link admin-only" data-section="fees">Fees &amp; Billing</a>
@@ -748,6 +749,24 @@
     </div>
   </div>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=8"></script>
+  <script>
+    // Wrap bare tables in a scroll container on small screens for clean mobile layout.
+    (function () {
+      function wrapTables() {
+        document.querySelectorAll('main table').forEach(function (t) {
+          if (t.parentElement && t.parentElement.classList.contains('table-wrap')) return;
+          var w = document.createElement('div');
+          w.className = 'table-wrap';
+          t.parentNode.insertBefore(w, t);
+          w.appendChild(t);
+        });
+      }
+      if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wrapTables);
+      else wrapTables();
+      var mo = new MutationObserver(wrapTables);
+      mo.observe(document.body, { childList: true, subtree: true });
+    })();
+  </script>
 </body>
 </html>

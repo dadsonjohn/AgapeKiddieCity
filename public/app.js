@@ -337,6 +337,21 @@ function fillClassSelect(select, section, selected, allLabel) {
   if (selected) select.value = selected;
 }
 
+// --- Mobile nav toggle ---
+function toggleNav() {
+  const header = document.getElementById('app-header');
+  const btn = document.getElementById('nav-toggle');
+  const open = header.classList.toggle('nav-open');
+  if (btn) btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  btn.textContent = open ? '✕' : '☰';
+}
+function closeNav() {
+  const header = document.getElementById('app-header');
+  const btn = document.getElementById('nav-toggle');
+  if (header) header.classList.remove('nav-open');
+  if (btn) { btn.setAttribute('aria-expanded', 'false'); btn.textContent = '☰'; }
+}
+
 // --- Navigation ---
 const navLinks = document.querySelectorAll('.nav-link');
 const pages = document.querySelectorAll('.page');
@@ -345,6 +360,7 @@ navLinks.forEach(link => {
   link.addEventListener('click', (e) => {
     e.preventDefault();
     const section = link.dataset.section;
+    closeNav();
 
     navLinks.forEach(l => l.classList.remove('active'));
     link.classList.add('active');
