@@ -170,6 +170,8 @@ header h1 { font-size: 1.4rem; font-weight: 700; letter-spacing: -0.01em; }
 
 nav { display: flex; flex-wrap: wrap; gap: 0.25rem; }
 
+.nav-toggle { display: none; }
+
 nav .nav-link {
   color: rgba(255,255,255,0.85); text-decoration: none;
   padding: 0.5rem 0.95rem; border-radius: var(--radius-sm);
@@ -677,12 +679,21 @@ table tr:hover { background: var(--bg-soft); }
 @media (max-width: 768px) {
   header { padding: 0.75rem 1rem; }
   header h1 { font-size: 1.15rem; }
-  nav {
-    width: 100%; display: flex; flex-wrap: nowrap; overflow-x: auto;
-    -webkit-overflow-scrolling: touch; gap: 0.25rem; padding-bottom: 0.25rem;
-    scrollbar-width: none;
+  .nav-toggle {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 40px; height: 40px; border: none; border-radius: var(--radius-sm);
+    background: rgba(255,255,255,0.15); color: #fff; font-size: 1.25rem;
+    cursor: pointer; transition: background var(--transition);
   }
-  nav::-webkit-scrollbar { display: none; }
+  .nav-toggle:hover { background: rgba(255,255,255,0.25); }
+  nav {
+    display: none; position: absolute; top: 100%; left: 0; right: 0;
+    flex-direction: column; gap: 0.25rem; padding: 0.75rem 1rem 1rem;
+    background: linear-gradient(135deg, var(--green-900) 0%, var(--green-700) 100%);
+    box-shadow: var(--shadow-lg); z-index: 99;
+  }
+  header.nav-open nav { display: flex; }
+  nav .nav-link { margin: 0; width: 100%; text-align: left; }
   nav .nav-link { margin: 0; padding: 0.4rem 0.7rem; font-size: 0.82rem; }
   .container { padding: 0 0.75rem; margin: 1rem auto; }
   .page-header h2 { font-size: 1.25rem; }
